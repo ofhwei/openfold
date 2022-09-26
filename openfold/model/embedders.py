@@ -13,8 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import torch
-import torch.nn as nn
+import oneflow as flow
+import oneflow.nn as nn
 from typing import Tuple, Optional
 
 from openfold.model.primitives import Linear, LayerNorm
@@ -68,7 +68,7 @@ class InputEmbedder(nn.Module):
         self.no_bins = 2 * relpos_k + 1
         self.linear_relpos = Linear(self.no_bins, c_z)
 
-    def relpos(self, ri: torch.Tensor):
+    def relpos(self, ri: flow.Tensor):
         """
         Computes relative positional encodings
 
@@ -79,24 +79,24 @@ class InputEmbedder(nn.Module):
                 "residue_index" features of shape [*, N]
         """
         d = ri[..., None] - ri[..., None, :]
-        boundaries = torch.arange(
+        boundaries = flow.arange(
             start=-self.relpos_k, end=self.relpos_k + 1, device=d.device
         ) 
         reshaped_bins = boundaries.view(((1,) * len(d.shape)) + (len(boundaries),))
         d = d[..., None] - reshaped_bins
-        d = torch.abs(d)
-        d = torch.argmin(d, dim=-1)
+        d = flow.abs(d)
+        d = flow.argmin(d, dim=-1)
         d = nn.functional.one_hot(d, num_classes=len(boundaries)).float()
         d = d.to(ri.dtype)
         return self.linear_relpos(d)
 
     def forward(
         self,
-        tf: torch.Tensor,
-        ri: torch.Tensor,
-        msa: torch.Tensor,
+        tf: flow.Tensor,
+        ri: flow.Tensor,
+        msa: flow.Tensor,
         inplace_safe: bool = False,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> Tuple[flow.Tensor, flow.Tensor]:
         """
         Args:
             tf:
@@ -183,11 +183,11 @@ class RecyclingEmbedder(nn.Module):
 
     def forward(
         self,
-        m: torch.Tensor,
-        z: torch.Tensor,
-        x: torch.Tensor,
+        m: flow.Tensor,
+        z: flow.Tensor,
+        x: flow.Tensor,
         inplace_safe: bool = False,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> Tuple[flow.Tensor, flow.Tensor]:
         """
         Args:
             m:
@@ -215,7 +215,7 @@ class RecyclingEmbedder(nn.Module):
             z_update = z
 
         # This squared method might become problematic in FP16 mode.
-        bins = torch.linspace(
+        bins = flow.linspace(
             self.min_bin,
             self.max_bin,
             self.no_bins,
@@ -224,11 +224,11 @@ class RecyclingEmbedder(nn.Module):
             requires_grad=False,
         )
         squared_bins = bins ** 2
-        upper = torch.cat(
+        upper = flow.cat(
             [squared_bins[1:], squared_bins.new_tensor([self.inf])], dim=-1
         )
-        d = torch.sum(
-            (x[..., None, :] - x[..., None, :, :]) ** 2, dim=-1, keepdims=True
+        d = flow.sum(
+            (x[..., None, :] - x[..., None, :, :]) ** 2, dim=-1, keepdim=True
         )
 
         # [*, N, N, no_bins]
@@ -270,7 +270,7 @@ class TemplateAngleEmbedder(nn.Module):
         self.relu = nn.ReLU()
         self.linear_2 = Linear(self.c_out, self.c_out, init="relu")
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: flow.Tensor) -> flow.Tensor:
         """
         Args:
             x: [*, N_templ, N_res, c_in] "template_angle_feat" features
@@ -314,8 +314,8 @@ class TemplatePairEmbedder(nn.Module):
 
     def forward(
         self,
-        x: torch.Tensor,
-    ) -> torch.Tensor:
+        x: flow.Tensor,
+    ) -> flow.Tensor:
         """
         Args:
             x:
@@ -354,7 +354,7 @@ class ExtraMSAEmbedder(nn.Module):
 
         self.linear = Linear(self.c_in, self.c_out)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: flow.Tensor) -> flow.Tensor:
         """
         Args:
             x:

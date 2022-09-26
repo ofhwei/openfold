@@ -16,9 +16,10 @@
 import itertools
 from functools import reduce, wraps
 from operator import add
+from sys import maxsize
 
 import numpy as np
-import torch
+import oneflow as flow
 
 from openfold.config import NUM_RES, NUM_EXTRA_SEQ, NUM_TEMPLATES, NUM_MSA_SEQ
 from openfold.np import residue_constants as rc
@@ -43,28 +44,28 @@ MSA_FEATURE_NAMES = [
 def cast_to_64bit_ints(protein):
     # We keep all ints as int64
     for k, v in protein.items():
-        if v.dtype == torch.int32:
-            protein[k] = v.type(torch.int64)
+        if v.dtype == flow.int32:
+            protein[k] = v.type(flow.int64)
 
     return protein
 
 
 def make_one_hot(x, num_classes):
-    x_one_hot = torch.zeros(*x.shape, num_classes, device=x.device)
-    x_one_hot.scatter_(-1, x.unsqueeze(-1), 1)
+    x_one_hot = flow.zeros(*x.shape, num_classes, device=x.device)
+    x_one_hot = flow.scatter(x_one_hot, -1, x.unsqueeze(-1), 1)
     return x_one_hot
 
 
 def make_seq_mask(protein):
-    protein["seq_mask"] = torch.ones(
-        protein["aatype"].shape, dtype=torch.float32
+    protein["seq_mask"] = flow.ones(
+        protein["aatype"].shape, dtype=flow.float32
     )
     return protein
 
 
 def make_template_mask(protein):
-    protein["template_mask"] = torch.ones(
-        protein["template_aatype"].shape[0], dtype=torch.float32
+    protein["template_mask"] = flow.ones(
+        protein["template_aatype"].shape[0], dtype=flow.float32
     )
     return protein
 
@@ -87,15 +88,15 @@ def fix_templates_aatype(protein):
     # Map one-hot to indices
     num_templates = protein["template_aatype"].shape[0]
     if(num_templates > 0):
-        protein["template_aatype"] = torch.argmax(
+        protein["template_aatype"] = flow.argmax(
             protein["template_aatype"], dim=-1
         )
         # Map hhsearch-aatype to our aatype.
         new_order_list = rc.MAP_HHBLITS_AATYPE_TO_OUR_AATYPE
-        new_order = torch.tensor(
-            new_order_list, dtype=torch.int64, device=protein["aatype"].device,
+        new_order = flow.tensor(
+            new_order_list, dtype=flow.int64, device=protein["aatype"].device,
         ).expand(num_templates, -1)
-        protein["template_aatype"] = torch.gather(
+        protein["template_aatype"] = flow.gather(
             new_order, 1, index=protein["template_aatype"]
         )
 
@@ -105,11 +106,11 @@ def fix_templates_aatype(protein):
 def correct_msa_restypes(protein):
     """Correct MSA restype to have the same order as rc."""
     new_order_list = rc.MAP_HHBLITS_AATYPE_TO_OUR_AATYPE
-    new_order = torch.tensor(
+    new_order = flow.tensor(
         [new_order_list] * protein["msa"].shape[1], 
         device=protein["msa"].device,
     ).transpose(0, 1)
-    protein["msa"] = torch.gather(new_order, 0, protein["msa"])
+    protein["msa"] = flow.gather(new_order, 0, protein["msa"])
 
     perm_matrix = np.zeros((22, 22), dtype=np.float32)
     perm_matrix[range(len(new_order_list)), new_order_list] = 1.0
@@ -122,14 +123,14 @@ def correct_msa_restypes(protein):
                 21,
                 22,
             ], "num_dim for %s out of expected range: %s" % (k, num_dim)
-            protein[k] = torch.dot(protein[k], perm_matrix[:num_dim, :num_dim])
+            protein[k] = flow.dot(protein[k], perm_matrix[:num_dim, :num_dim])
     
     return protein
 
 
 def squeeze_features(protein):
     """Remove singleton and repeated dimensions in protein features."""
-    protein["aatype"] = torch.argmax(protein["aatype"], dim=-1)
+    protein["aatype"] = flow.argmax(protein["aatype"], dim=-1)
     for k in [
         "domain_name",
         "msa",
@@ -146,8 +147,8 @@ def squeeze_features(protein):
         if k in protein:
             final_dim = protein[k].shape[-1]
             if isinstance(final_dim, int) and final_dim == 1:
-                if torch.is_tensor(protein[k]):
-                    protein[k] = torch.squeeze(protein[k], dim=-1)
+                if flow.is_tensor(protein[k]):
+                    protein[k] = flow.squeeze(protein[k], dim=-1)
                 else:
                     protein[k] = np.squeeze(protein[k], axis=-1)
 
@@ -161,20 +162,20 @@ def squeeze_features(protein):
 @curry1
 def randomly_replace_msa_with_unknown(protein, replace_proportion):
     """Replace a portion of the MSA with 'X'."""
-    msa_mask = torch.rand(protein["msa"].shape) < replace_proportion
+    msa_mask = flow.rand(protein["msa"].shape) < replace_proportion
     x_idx = 20
     gap_idx = 21
-    msa_mask = torch.logical_and(msa_mask, protein["msa"] != gap_idx)
-    protein["msa"] = torch.where(
+    msa_mask = flow.logical_and(msa_mask, protein["msa"] != gap_idx)
+    protein["msa"] = flow.where(
         msa_mask,
-        torch.ones_like(protein["msa"]) * x_idx,
+        flow.ones_like(protein["msa"]) * x_idx,
         protein["msa"]
     )
-    aatype_mask = torch.rand(protein["aatype"].shape) < replace_proportion
+    aatype_mask = flow.rand(protein["aatype"].shape) < replace_proportion
 
-    protein["aatype"] = torch.where(
+    protein["aatype"] = flow.where(
         aatype_mask,
-        torch.ones_like(protein["aatype"]) * x_idx,
+        flow.ones_like(protein["aatype"]) * x_idx,
         protein["aatype"],
     )
     return protein
@@ -184,26 +185,26 @@ def randomly_replace_msa_with_unknown(protein, replace_proportion):
 def sample_msa(protein, max_seq, keep_extra, seed=None):
     """Sample MSA randomly, remaining sequences are stored are stored as `extra_*`.""" 
     num_seq = protein["msa"].shape[0]
-    g = torch.Generator(device=protein["msa"].device)
+    g = flow.Generator(device=str(protein["msa"].device))
     if seed is not None:
         g.manual_seed(seed)
-    shuffled = torch.randperm(num_seq - 1, generator=g) + 1
-    index_order = torch.cat(
-        (torch.tensor([0], device=shuffled.device), shuffled), 
+    shuffled = flow.randperm(num_seq - 1, generator=g) + 1
+    index_order = flow.cat(
+        (flow.tensor([0], device=shuffled.device), shuffled), 
         dim=0
     )
     num_sel = min(max_seq, num_seq)
-    sel_seq, not_sel_seq = torch.split(
+    sel_seq, not_sel_seq = flow.split(
         index_order, [num_sel, num_seq - num_sel]
     )
 
     for k in MSA_FEATURE_NAMES:
         if k in protein:
             if keep_extra:
-                protein["extra_" + k] = torch.index_select(
+                protein["extra_" + k] = flow.index_select(
                     protein[k], 0, not_sel_seq
                 )
-            protein[k] = torch.index_select(protein[k], 0, sel_seq)
+            protein[k] = flow.index_select(protein[k], 0, sel_seq)
 
     return protein
 
@@ -224,10 +225,10 @@ def sample_msa_distillation(protein, max_seq):
 def crop_extra_msa(protein, max_extra_msa):
     num_seq = protein["extra_msa"].shape[0]
     num_sel = min(max_extra_msa, num_seq)
-    select_indices = torch.randperm(num_seq)[:num_sel]
+    select_indices = flow.randperm(num_seq)[:num_sel]
     for k in MSA_FEATURE_NAMES:
         if "extra_" + k in protein:
-            protein["extra_" + k] = torch.index_select(
+            protein["extra_" + k] = flow.index_select(
                 protein["extra_" + k], 0, select_indices
             )
     
@@ -245,44 +246,44 @@ def delete_extra_msa(protein):
 @curry1
 def block_delete_msa(protein, config):
     num_seq = protein["msa"].shape[0]
-    block_num_seq = torch.floor(
-        torch.tensor(num_seq, dtype=torch.float32, device=protein["msa"].device)
+    block_num_seq = flow.floor(
+        flow.tensor(num_seq, dtype=flow.float32, device=protein["msa"].device)
         * config.msa_fraction_per_block
-    ).to(torch.int32)
+    ).to(flow.int32)
 
     if config.randomize_num_blocks:
-        nb = torch.distributions.uniform.Uniform(
+        nb = flow.distributions.uniform.Uniform(
             0, config.num_blocks + 1
         ).sample()
     else:
         nb = config.num_blocks
 
-    del_block_starts = torch.distributions.Uniform(0, num_seq).sample(nb)
-    del_blocks = del_block_starts[:, None] + torch.range(block_num_seq)
-    del_blocks = torch.clip(del_blocks, 0, num_seq - 1)
-    del_indices = torch.unique(torch.sort(torch.reshape(del_blocks, [-1])))[0]
+    del_block_starts = flow.distributions.Uniform(0, num_seq).sample(nb)
+    del_blocks = del_block_starts[:, None] + flow.range(block_num_seq)
+    del_blocks = flow.clip(del_blocks, 0, num_seq - 1)
+    del_indices = flow.unique(flow.sort(flow.reshape(del_blocks, [-1])))[0]
 
     # Make sure we keep the original sequence
-    combined = torch.cat((torch.range(1, num_seq)[None], del_indices[None]))
+    combined = flow.cat((flow.range(1, num_seq)[None], del_indices[None]))
     uniques, counts = combined.unique(return_counts=True)
     difference = uniques[counts == 1]
     intersection = uniques[counts > 1]
-    keep_indices = torch.squeeze(difference, 0)
+    keep_indices = flow.squeeze(difference, 0)
 
     for k in MSA_FEATURE_NAMES:
         if k in protein:
-            protein[k] = torch.gather(protein[k], keep_indices)
+            protein[k] = flow.gather(protein[k], keep_indices)
 
     return protein
 
 
 @curry1
 def nearest_neighbor_clusters(protein, gap_agreement_weight=0.0):
-    weights = torch.cat(
+    weights = flow.cat(
         [
-            torch.ones(21, device=protein["msa"].device), 
-            gap_agreement_weight * torch.ones(1, device=protein["msa"].device),
-            torch.zeros(1, device=protein["msa"].device)
+            flow.ones(21, device=protein["msa"].device), 
+            gap_agreement_weight * flow.ones(1, device=protein["msa"].device),
+            flow.zeros(1, device=protein["msa"].device)
         ],
         0,
     )
@@ -298,16 +299,16 @@ def nearest_neighbor_clusters(protein, gap_agreement_weight=0.0):
 
     # Compute tf.einsum('mrc,nrc,c->mn', sample_one_hot, extra_one_hot, weights)
     # in an optimized fashion to avoid possible memory or computation blowup.
-    agreement = torch.matmul(
-        torch.reshape(extra_one_hot, [extra_num_seq, num_res * 23]),
-        torch.reshape(
+    agreement = flow.matmul(
+        flow.reshape(extra_one_hot, [extra_num_seq, num_res * 23]),
+        flow.reshape(
             sample_one_hot * weights, [num_seq, num_res * 23]
         ).transpose(0, 1),
     )
 
     # Assign each sequence in the extra sequences to the closest MSA sample
-    protein["extra_cluster_assignment"] = torch.argmax(agreement, dim=1).to(
-        torch.int64
+    protein["extra_cluster_assignment"] = flow.argmax(agreement, dim=1).to(
+        flow.int64
     )
     
     return protein
@@ -332,10 +333,7 @@ def unsorted_segment_sum(data, segment_ids, num_segments):
     )
     segment_ids = segment_ids.expand(data.shape)
     shape = [num_segments] + list(data.shape[1:])
-    tensor = (
-        torch.zeros(*shape, device=segment_ids.device)
-        .scatter_add_(0, segment_ids, data.float())
-    )
+    tensor = flow.scatter_add(flow.zeros(*shape, device=segment_ids.device), 0, segment_ids, data.float())
     tensor = tensor.type(data.dtype)
     return tensor
 
@@ -368,26 +366,26 @@ def summarize_clusters(protein):
 
 def make_msa_mask(protein):
     """Mask features are all ones, but will later be zero-padded."""
-    protein["msa_mask"] = torch.ones(protein["msa"].shape, dtype=torch.float32)
-    protein["msa_row_mask"] = torch.ones(
-        (protein["msa"].shape[0]), dtype=torch.float32
+    protein["msa_mask"] = flow.ones(protein["msa"].shape, dtype=flow.float32)
+    protein["msa_row_mask"] = flow.ones(
+        (protein["msa"].shape[0]), dtype=flow.float32
     )
     return protein
 
 
 def pseudo_beta_fn(aatype, all_atom_positions, all_atom_mask):
     """Create pseudo beta features."""
-    is_gly = torch.eq(aatype, rc.restype_order["G"])
+    is_gly = flow.eq(aatype, rc.restype_order["G"])
     ca_idx = rc.atom_order["CA"]
     cb_idx = rc.atom_order["CB"]
-    pseudo_beta = torch.where(
-        torch.tile(is_gly[..., None], [1] * len(is_gly.shape) + [3]),
+    pseudo_beta = flow.where(
+        flow.tile(is_gly[..., None], [1] * len(is_gly.shape) + [3]),
         all_atom_positions[..., ca_idx, :],
         all_atom_positions[..., cb_idx, :],
     )
 
     if all_atom_mask is not None:
-        pseudo_beta_mask = torch.where(
+        pseudo_beta_mask = flow.where(
             is_gly, all_atom_mask[..., ca_idx], all_atom_mask[..., cb_idx]
         )
         return pseudo_beta, pseudo_beta_mask
@@ -412,18 +410,18 @@ def make_pseudo_beta(protein, prefix=""):
 
 @curry1
 def add_constant_field(protein, key, value):
-    protein[key] = torch.tensor(value, device=protein["msa"].device)
+    protein[key] = flow.tensor(value, device=protein["msa"].device)
     return protein
 
 
 def shaped_categorical(probs, epsilon=1e-10):
     ds = probs.shape
     num_classes = ds[-1]
-    distribution = torch.distributions.categorical.Categorical(
-        torch.reshape(probs + epsilon, [-1, num_classes])
+    distribution = flow.distributions.categorical.Categorical(
+        flow.reshape(probs + epsilon, [-1, num_classes])
     )
     counts = distribution.sample()
-    return torch.reshape(counts, ds[:-1])
+    return flow.reshape(counts, ds[:-1])
 
 
 def make_hhblits_profile(protein):
@@ -434,7 +432,7 @@ def make_hhblits_profile(protein):
     # Compute the profile for every residue (over all MSA sequences).
     msa_one_hot = make_one_hot(protein["msa"], 22)
 
-    protein["hhblits_profile"] = torch.mean(msa_one_hot, dim=0)
+    protein["hhblits_profile"] = flow.mean(msa_one_hot, dim=0)
     return protein
 
 
@@ -442,9 +440,9 @@ def make_hhblits_profile(protein):
 def make_masked_msa(protein, config, replace_fraction):
     """Create data for BERT on raw MSA."""
     # Add a random amino acid uniformly.
-    random_aa = torch.tensor(
+    random_aa = flow.tensor(
         [0.05] * 20 + [0.0, 0.0], 
-        dtype=torch.float32, 
+        dtype=flow.float32, 
         device=protein["aatype"].device
     )
 
@@ -464,18 +462,18 @@ def make_masked_msa(protein, config, replace_fraction):
     )
     assert mask_prob >= 0.0
 
-    categorical_probs = torch.nn.functional.pad(
+    categorical_probs = flow.nn.functional.pad(
         categorical_probs, pad_shapes, value=mask_prob
     )
 
     sh = protein["msa"].shape
-    mask_position = torch.rand(sh) < replace_fraction
+    mask_position = flow.rand(sh) < replace_fraction
 
     bert_msa = shaped_categorical(categorical_probs)
-    bert_msa = torch.where(mask_position, bert_msa, protein["msa"])
+    bert_msa = flow.where(mask_position, bert_msa, protein["msa"])
 
     # Mix real and masked MSA
-    protein["bert_mask"] = mask_position.to(torch.float32)
+    protein["bert_mask"] = mask_position.to(flow.float32)
     protein["true_msa"] = protein["msa"]
     protein["msa"] = bert_msa
 
@@ -515,8 +513,8 @@ def make_fixed_size(
         padding.reverse()
         padding = list(itertools.chain(*padding))
         if padding:
-            protein[k] = torch.nn.functional.pad(v, padding)
-            protein[k] = torch.reshape(protein[k], pad_size)
+            protein[k] = flow.nn.functional.pad(v, padding)
+            protein[k] = flow.reshape(protein[k], pad_size)
     
     return protein
 
@@ -526,49 +524,49 @@ def make_msa_feat(protein):
     """Create and concatenate MSA features."""
     # Whether there is a domain break. Always zero for chains, but keeping for
     # compatibility with domain datasets.
-    has_break = torch.clip(
-        protein["between_segment_residues"].to(torch.float32), 0, 1
+    has_break = flow.clip(
+        protein["between_segment_residues"].to(flow.float32), 0, 1
     )
     aatype_1hot = make_one_hot(protein["aatype"], 21)
 
     target_feat = [
-        torch.unsqueeze(has_break, dim=-1),
+        flow.unsqueeze(has_break, dim=-1),
         aatype_1hot,  # Everyone gets the original sequence.
     ]
 
     msa_1hot = make_one_hot(protein["msa"], 23)
-    has_deletion = torch.clip(protein["deletion_matrix"], 0.0, 1.0)
-    deletion_value = torch.atan(protein["deletion_matrix"] / 3.0) * (
+    has_deletion = flow.clip(protein["deletion_matrix"], 0.0, 1.0)
+    deletion_value = flow.atan(protein["deletion_matrix"] / 3.0) * (
         2.0 / np.pi
     )
 
     msa_feat = [
         msa_1hot,
-        torch.unsqueeze(has_deletion, dim=-1),
-        torch.unsqueeze(deletion_value, dim=-1),
+        flow.unsqueeze(has_deletion, dim=-1),
+        flow.unsqueeze(deletion_value, dim=-1),
     ]
 
     if "cluster_profile" in protein:
-        deletion_mean_value = torch.atan(
+        deletion_mean_value = flow.atan(
             protein["cluster_deletion_mean"] / 3.0
         ) * (2.0 / np.pi)
         msa_feat.extend(
             [
                 protein["cluster_profile"],
-                torch.unsqueeze(deletion_mean_value, dim=-1),
+                flow.unsqueeze(deletion_mean_value, dim=-1),
             ]
         )
 
     if "extra_deletion_matrix" in protein:
-        protein["extra_has_deletion"] = torch.clip(
+        protein["extra_has_deletion"] = flow.clip(
             protein["extra_deletion_matrix"], 0.0, 1.0
         )
-        protein["extra_deletion_value"] = torch.atan(
+        protein["extra_deletion_value"] = flow.atan(
             protein["extra_deletion_matrix"] / 3.0
         ) * (2.0 / np.pi)
 
-    protein["msa_feat"] = torch.cat(msa_feat, dim=-1)
-    protein["target_feat"] = torch.cat(target_feat, dim=-1)
+    protein["msa_feat"] = flow.cat(msa_feat, dim=-1)
+    protein["target_feat"] = flow.cat(target_feat, dim=-1)
     return protein
 
 
@@ -613,22 +611,22 @@ def make_atom14_masks(protein):
     restype_atom37_to_atom14.append([0] * 37)
     restype_atom14_mask.append([0.0] * 14)
 
-    restype_atom14_to_atom37 = torch.tensor(
+    restype_atom14_to_atom37 = flow.tensor(
         restype_atom14_to_atom37,
-        dtype=torch.int32,
+        dtype=flow.int32,
         device=protein["aatype"].device,
     )
-    restype_atom37_to_atom14 = torch.tensor(
+    restype_atom37_to_atom14 = flow.tensor(
         restype_atom37_to_atom14,
-        dtype=torch.int32,
+        dtype=flow.int32,
         device=protein["aatype"].device,
     )
-    restype_atom14_mask = torch.tensor(
+    restype_atom14_mask = flow.tensor(
         restype_atom14_mask,
-        dtype=torch.float32,
+        dtype=flow.float32,
         device=protein["aatype"].device,
     )
-    protein_aatype = protein['aatype'].to(torch.long)
+    protein_aatype = protein['aatype'].to(flow.long)
 
     # create the mapping for (residx, atom14) --> atom37, i.e. an array
     # with shape (num_res, 14) containing the atom37 indices for this protein
@@ -643,8 +641,8 @@ def make_atom14_masks(protein):
     protein["residx_atom37_to_atom14"] = residx_atom37_to_atom14.long()
 
     # create the corresponding mask
-    restype_atom37_mask = torch.zeros(
-        [21, 37], dtype=torch.float32, device=protein["aatype"].device
+    restype_atom37_mask = flow.zeros(
+        [21, 37], dtype=flow.float32, device=protein["aatype"].device
     )
     for restype, restype_letter in enumerate(rc.restypes):
         restype_name = rc.restype_1to3[restype_letter]
@@ -661,7 +659,7 @@ def make_atom14_masks(protein):
 
 def make_atom14_masks_np(batch):
     batch = tree_map(
-        lambda n: torch.tensor(n, device=batch["aatype"].device), 
+        lambda n: flow.tensor(n, device=batch["aatype"].device), 
         batch, 
         np.ndarray
     )
@@ -704,7 +702,7 @@ def make_atom14_positions(protein):
 
     # Matrices for renaming ambiguous atoms.
     all_matrices = {
-        res: torch.eye(
+        res: flow.eye(
             14,
             dtype=protein["all_atom_mask"].dtype,
             device=protein["all_atom_mask"].device,
@@ -712,7 +710,7 @@ def make_atom14_positions(protein):
         for res in restype_3
     }
     for resname, swap in rc.residue_atom_renaming_swaps.items():
-        correspondences = torch.arange(
+        correspondences = flow.arange(
             14, device=protein["all_atom_mask"].device
         )
         for source_atom_swap, target_atom_swap in swap.items():
@@ -729,7 +727,7 @@ def make_atom14_positions(protein):
                 renaming_matrix[index, correspondence] = 1.0
         all_matrices[resname] = renaming_matrix
     
-    renaming_matrices = torch.stack(
+    renaming_matrices = flow.stack(
         [all_matrices[restype] for restype in restype_3]
     )
 
@@ -738,7 +736,7 @@ def make_atom14_positions(protein):
     renaming_transform = renaming_matrices[protein["aatype"]]
 
     # Apply it to the ground truth positions. shape (num_res, 14, 3).
-    alternative_gt_positions = torch.einsum(
+    alternative_gt_positions = flow.einsum(
         "...rac,...rab->...rbc", residx_atom14_gt_positions, renaming_transform
     )
     protein["atom14_alt_gt_positions"] = alternative_gt_positions
@@ -746,7 +744,7 @@ def make_atom14_positions(protein):
     # Create the mask for the alternative ground truth (differs from the
     # ground truth mask, if only one of the atoms in an ambiguous pair has a
     # ground truth position).
-    alternative_gt_mask = torch.einsum(
+    alternative_gt_mask = flow.einsum(
         "...ra,...rab->...rb", residx_atom14_gt_mask, renaming_transform
     )
     protein["atom14_alt_gt_exists"] = alternative_gt_mask
@@ -851,10 +849,10 @@ def atom37_to_frames(protein, eps=1e-8):
         dim=-1,
         no_batch_dims=len(all_atom_mask.shape[:-1]),
     )
-    gt_exists = torch.min(gt_atoms_exist, dim=-1)[0] * group_exists
+    gt_exists = flow.min(gt_atoms_exist, dim=-1)[0] * group_exists
 
-    rots = torch.eye(3, dtype=all_atom_mask.dtype, device=aatype.device)
-    rots = torch.tile(rots, (*((1,) * batch_dims), 8, 1, 1))
+    rots = flow.eye(3, dtype=all_atom_mask.dtype, device=aatype.device)
+    rots = flow.tile(rots, (*((1,) * batch_dims), 8, 1, 1))
     rots[..., 0, 0, 0] = -1
     rots[..., 0, 2, 2] = -1
     rots = Rotation(rot_mats=rots)
@@ -864,10 +862,10 @@ def atom37_to_frames(protein, eps=1e-8):
     restype_rigidgroup_is_ambiguous = all_atom_mask.new_zeros(
         *((1,) * batch_dims), 21, 8
     )
-    restype_rigidgroup_rots = torch.eye(
+    restype_rigidgroup_rots = flow.eye(
         3, dtype=all_atom_mask.dtype, device=aatype.device
     )
-    restype_rigidgroup_rots = torch.tile(
+    restype_rigidgroup_rots = flow.tile(
         restype_rigidgroup_rots,
         (*((1,) * batch_dims), 21, 8, 1, 1),
     )
@@ -973,43 +971,43 @@ def atom37_to_torsion_angles(
     all_atom_positions = protein[prefix + "all_atom_positions"]
     all_atom_mask = protein[prefix + "all_atom_mask"]
 
-    aatype = torch.clamp(aatype, max=20)
+    aatype = flow.clamp(aatype, max=20)
 
     pad = all_atom_positions.new_zeros(
         [*all_atom_positions.shape[:-3], 1, 37, 3]
     )
-    prev_all_atom_positions = torch.cat(
+    prev_all_atom_positions = flow.cat(
         [pad, all_atom_positions[..., :-1, :, :]], dim=-3
     )
 
     pad = all_atom_mask.new_zeros([*all_atom_mask.shape[:-2], 1, 37])
-    prev_all_atom_mask = torch.cat([pad, all_atom_mask[..., :-1, :]], dim=-2)
+    prev_all_atom_mask = flow.cat([pad, all_atom_mask[..., :-1, :]], dim=-2)
 
-    pre_omega_atom_pos = torch.cat(
+    pre_omega_atom_pos = flow.cat(
         [prev_all_atom_positions[..., 1:3, :], all_atom_positions[..., :2, :]],
         dim=-2,
     )
-    phi_atom_pos = torch.cat(
+    phi_atom_pos = flow.cat(
         [prev_all_atom_positions[..., 2:3, :], all_atom_positions[..., :3, :]],
         dim=-2,
     )
-    psi_atom_pos = torch.cat(
+    psi_atom_pos = flow.cat(
         [all_atom_positions[..., :3, :], all_atom_positions[..., 4:5, :]],
         dim=-2,
     )
 
-    pre_omega_mask = torch.prod(
+    pre_omega_mask = flow.prod(
         prev_all_atom_mask[..., 1:3], dim=-1
-    ) * torch.prod(all_atom_mask[..., :2], dim=-1)
-    phi_mask = prev_all_atom_mask[..., 2] * torch.prod(
+    ) * flow.prod(all_atom_mask[..., :2], dim=-1)
+    phi_mask = prev_all_atom_mask[..., 2] * flow.prod(
         all_atom_mask[..., :3], dim=-1, dtype=all_atom_mask.dtype
     )
     psi_mask = (
-        torch.prod(all_atom_mask[..., :3], dim=-1, dtype=all_atom_mask.dtype)
+        flow.prod(all_atom_mask[..., :3], dim=-1, dtype=all_atom_mask.dtype)
         * all_atom_mask[..., 4]
     )
 
-    chi_atom_indices = torch.as_tensor(
+    chi_atom_indices = flow.as_tensor(
         get_chi_atom_indices(), device=aatype.device
     )
 
@@ -1030,12 +1028,12 @@ def atom37_to_torsion_angles(
         dim=-1,
         no_batch_dims=len(atom_indices.shape[:-2]),
     )
-    chi_angle_atoms_mask = torch.prod(
+    chi_angle_atoms_mask = flow.prod(
         chi_angle_atoms_mask, dim=-1, dtype=chi_angle_atoms_mask.dtype
     )
     chis_mask = chis_mask * chi_angle_atoms_mask
 
-    torsions_atom_pos = torch.cat(
+    torsions_atom_pos = flow.cat(
         [
             pre_omega_atom_pos[..., None, :, :],
             phi_atom_pos[..., None, :, :],
@@ -1045,7 +1043,7 @@ def atom37_to_torsion_angles(
         dim=-3,
     )
 
-    torsion_angles_mask = torch.cat(
+    torsion_angles_mask = flow.cat(
         [
             pre_omega_mask[..., None],
             phi_mask[..., None],
@@ -1066,16 +1064,16 @@ def atom37_to_torsion_angles(
         torsions_atom_pos[..., 3, :]
     )
 
-    torsion_angles_sin_cos = torch.stack(
+    torsion_angles_sin_cos = flow.stack(
         [fourth_atom_rel_pos[..., 2], fourth_atom_rel_pos[..., 1]], dim=-1
     )
 
-    denom = torch.sqrt(
-        torch.sum(
-            torch.square(torsion_angles_sin_cos),
+    denom = flow.sqrt(
+        flow.sum(
+            flow.square(torsion_angles_sin_cos),
             dim=-1,
-            dtype=torsion_angles_sin_cos.dtype,
-            keepdims=True,
+            # dtype=torsion_angles_sin_cos.dtype,
+            keepdim=True,
         )
         + 1e-8
     )
@@ -1089,9 +1087,9 @@ def atom37_to_torsion_angles(
         rc.chi_pi_periodic,
     )[aatype, ...]
 
-    mirror_torsion_angles = torch.cat(
+    mirror_torsion_angles = flow.cat(
         [
-            all_atom_mask.new_ones(*aatype.shape, 3),
+            all_atom_mask.new_ones((*aatype.shape, 3)),
             1.0 - 2.0 * chi_is_ambiguous,
         ],
         dim=-1,
@@ -1139,7 +1137,7 @@ def random_crop_to_size(
 ):
     """Crop randomly to `crop_size`, or keep as is if shorter than that."""
     # We want each ensemble to be cropped the same way
-    g = torch.Generator(device=protein["seq_length"].device)
+    g = flow.Generator(device=str(protein["seq_length"].device))
     if seed is not None:
         g.manual_seed(seed)
 
@@ -1156,7 +1154,8 @@ def random_crop_to_size(
     num_res_crop_size = min(int(seq_length), crop_size)
 
     def _randint(lower, upper):
-        return int(torch.randint(
+        upper = int(upper)
+        return int(flow.randint(
                 lower,
                 upper + 1,
                 (1,),
@@ -1166,7 +1165,7 @@ def random_crop_to_size(
 
     if subsample_templates:
         templates_crop_start = _randint(0, num_templates)
-        templates_select_indices = torch.randperm(
+        templates_select_indices = flow.randperm(
             num_templates, device=protein["seq_length"].device, generator=g
         )
     else:

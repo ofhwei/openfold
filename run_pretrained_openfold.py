@@ -29,19 +29,9 @@ import pickle
 
 import random
 import time
-import torch
+import oneflow as flow
 
-torch_versions = torch.__version__.split(".")
-torch_major_version = int(torch_versions[0])
-torch_minor_version = int(torch_versions[1])
-if(
-    torch_major_version > 1 or 
-    (torch_major_version == 1 and torch_minor_version >= 12)
-):
-    # Gives a large speedup on Ampere-class GPUs
-    torch.set_float32_matmul_precision("high")
-
-torch.set_grad_enabled(False)
+flow.set_grad_enabled(False)
 
 from openfold.config import model_config
 from openfold.data import templates, feature_pipeline, data_pipeline
@@ -167,7 +157,7 @@ def main(args):
         random_seed = random.randrange(2**32)
     
     np.random.seed(random_seed)
-    torch.manual_seed(random_seed + 1)
+    flow.manual_seed(random_seed + 1)
     
     feature_processor = feature_pipeline.FeaturePipeline(config.data)
     if not os.path.exists(output_dir_base):
@@ -234,7 +224,7 @@ def main(args):
             )
 
             processed_feature_dict = {
-                k:torch.as_tensor(v, device=args.model_device) 
+                k:flow.as_tensor(v, device=flow.device(args.model_device)) 
                 for k,v in processed_feature_dict.items()
             }
 
@@ -297,24 +287,23 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "fasta_dir", type=str,
-        help="Path to directory containing FASTA files, one sequence per file"
+        "--fasta_dir", type=str, default="tests/test_data/",
     )
     parser.add_argument(
-        "template_mmcif_dir", type=str,
+        "--template_mmcif_dir", type=str, default="/data/dataset/openfold/pdb_mmcif/mmcif_files/",
     )
     parser.add_argument(
-        "--use_precomputed_alignments", type=str, default=None,
+        "--use_precomputed_alignments", type=str, default= None, # / output/alignments
         help="""Path to alignment directory. If provided, alignment computation 
                 is skipped and database path arguments are ignored."""
-    )
+    )  # "output/alignments"
     parser.add_argument(
-        "--output_dir", type=str, default=os.getcwd(),
+        "--output_dir", type=str, default="outputs",
         help="""Name of the directory in which to output the prediction""",
     )
     parser.add_argument(
-        "--model_device", type=str, default="cpu",
-        help="""Name of the device on which to run the model. Any valid torch
+        "--model_device", type=str, default="cuda:0",
+        help="""Name of the device on which to run the model. Any valid flow
              device name is accepted (e.g. "cpu", "cuda:0")"""
     )
     parser.add_argument(
@@ -337,7 +326,7 @@ if __name__ == "__main__":
         help="Whether to save all model outputs, including embeddings, etc."
     )
     parser.add_argument(
-        "--cpus", type=int, default=4,
+        "--cpus", type=int, default=16,
         help="""Number of CPUs with which to run alignment tools"""
     )
     parser.add_argument(
@@ -360,7 +349,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--trace_model", action="store_true", default=False,
-        help="""Whether to convert parts of each model to TorchScript.
+        help="""Whether to convert parts of each model to flowScript.
                 Significantly improves runtime at the cost of lengthy
                 'compilation.' Useful for large batch jobs."""
     )
@@ -374,11 +363,11 @@ if __name__ == "__main__":
 
     if(args.jax_param_path is None and args.openfold_checkpoint_path is None):
         args.jax_param_path = os.path.join(
-            "openfold", "resources", "params", 
+            "/data/dataset/openfold/params", 
             "params_" + args.config_preset + ".npz"
         )
 
-    if(args.model_device == "cpu" and torch.cuda.is_available()):
+    if(args.model_device == "cpu" and flow.cuda.is_available()):
         logging.warning(
             """The model is being run on CPU. Consider specifying 
             --model_device for better performance"""

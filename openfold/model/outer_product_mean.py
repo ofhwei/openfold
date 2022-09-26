@@ -16,8 +16,8 @@
 from functools import partial
 from typing import Optional
 
-import torch
-import torch.nn as nn
+import oneflow as flow
+import oneflow.nn as nn
 
 from openfold.model.primitives import Linear
 from openfold.utils.chunk_utils import chunk_layer
@@ -52,7 +52,7 @@ class OuterProductMean(nn.Module):
 
     def _opm(self, a, b):
         # [*, N_res, N_res, C, C]
-        outer = torch.einsum("...bac,...dae->...bdce", a, b)
+        outer = flow.einsum("...bac,...dae->...bdce", a, b)
 
         # [*, N_res, N_res, C * C]
         outer = outer.reshape(outer.shape[:-2] + (-1,))
@@ -62,12 +62,12 @@ class OuterProductMean(nn.Module):
 
         return outer
 
-    @torch.jit.ignore
+    # @flow.jit.ignore
     def _chunk(self, 
-        a: torch.Tensor, 
-        b: torch.Tensor, 
+        a: flow.Tensor, 
+        b: flow.Tensor, 
         chunk_size: int
-    ) -> torch.Tensor:
+    ) -> flow.Tensor:
         # Since the "batch dim" in this case is not a true batch dimension
         # (in that the shape of the output depends on it), we need to
         # iterate over it ourselves
@@ -87,18 +87,18 @@ class OuterProductMean(nn.Module):
         if(len(out) == 1):
             outer = out[0].unsqueeze(0)
         else:
-            outer = torch.stack(out, dim=0)
+            outer = flow.stack(out, dim=0)
 
         outer = outer.reshape(a.shape[:-3] + outer.shape[1:])
 
         return outer
 
     def forward(self, 
-        m: torch.Tensor, 
-        mask: Optional[torch.Tensor] = None,
+        m: flow.Tensor, 
+        mask: Optional[flow.Tensor] = None,
         chunk_size: Optional[int] = None,
         inplace_safe: bool = False,
-    ) -> torch.Tensor:
+    ) -> flow.Tensor:
         """
         Args:
             m:
@@ -133,7 +133,7 @@ class OuterProductMean(nn.Module):
             outer = self._opm(a, b)
 
         # [*, N_res, N_res, 1]
-        norm = torch.einsum("...abc,...adc->...bdc", mask, mask)
+        norm = flow.einsum("...abc,...adc->...bdc", mask, mask)
         norm = norm + self.eps
 
         # [*, N_res, N_res, C_z]

@@ -14,8 +14,8 @@
 # limitations under the License.
 from typing import Optional
 
-import torch
-import torch.nn as nn
+import oneflow as flow
+import oneflow.nn as nn
 
 from openfold.model.primitives import Linear, LayerNorm
 from openfold.utils.chunk_utils import chunk_layer
@@ -59,12 +59,12 @@ class PairTransition(nn.Module):
 
         return z
 
-    @torch.jit.ignore
+    # @flow.jit.ignore
     def _chunk(self,
-        z: torch.Tensor,
-        mask: torch.Tensor,
+        z: flow.Tensor,
+        mask: flow.Tensor,
         chunk_size: int,
-    ) -> torch.Tensor:
+    ) -> flow.Tensor:
         return chunk_layer(
             self._transition,
             {"z": z, "mask": mask},
@@ -73,10 +73,10 @@ class PairTransition(nn.Module):
         )
 
     def forward(self, 
-        z: torch.Tensor, 
-        mask: Optional[torch.Tensor] = None,
+        z: flow.Tensor, 
+        mask: Optional[flow.Tensor] = None,
         chunk_size: Optional[int] = None,
-    ) -> torch.Tensor:
+    ) -> flow.Tensor:
         """
         Args:
             z:

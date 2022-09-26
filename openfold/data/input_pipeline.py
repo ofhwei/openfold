@@ -15,7 +15,7 @@
 
 from functools import partial
 
-import torch
+import oneflow as flow
 
 from openfold.data import data_transforms
 
@@ -153,7 +153,7 @@ def ensembled_transform_fns(common_cfg, mode_cfg, ensemble_seed):
 def process_tensors_from_config(tensors, common_cfg, mode_cfg):
     """Based on the config, apply filters and transformations to the data."""
 
-    ensemble_seed = torch.Generator().seed()
+    ensemble_seed = flow.Generator().seed()
 
     def wrap_ensemble_fn(data, i):
         """Function to be mapped over the ensemble dimension."""
@@ -184,7 +184,7 @@ def process_tensors_from_config(tensors, common_cfg, mode_cfg):
         num_recycling = common_cfg.max_recycling_iters
 
     tensors = map_fn(
-        lambda x: wrap_ensemble_fn(tensors, x), torch.arange(num_recycling + 1)
+        lambda x: wrap_ensemble_fn(tensors, x), flow.arange(num_recycling + 1)
     )
 
     return tensors
@@ -202,7 +202,7 @@ def map_fn(fun, x):
     features = ensembles[0].keys()
     ensembled_dict = {}
     for feat in features:
-        ensembled_dict[feat] = torch.stack(
+        ensembled_dict[feat] = flow.stack(
             [dict_i[feat] for dict_i in ensembles], dim=-1
         )
     return ensembled_dict

@@ -18,8 +18,8 @@ import math
 import sys
 from operator import mul
 
-import torch
-import torch.nn as nn
+import oneflow as flow
+import oneflow.nn as nn
 from typing import Optional, Tuple, Sequence
 
 from openfold.model.primitives import Linear, LayerNorm, ipa_point_weights_init_
@@ -40,7 +40,7 @@ from openfold.utils.tensor_utils import (
     flatten_final_dims,
 )
 
-attn_core_inplace_cuda = importlib.import_module("attn_core_inplace_cuda")
+# attn_core_inplace_cuda = importlib.import_module("attn_core_inplace_cuda")
 
 
 class AngleResnetBlock(nn.Module):
@@ -59,7 +59,7 @@ class AngleResnetBlock(nn.Module):
 
         self.relu = nn.ReLU()
 
-    def forward(self, a: torch.Tensor) -> torch.Tensor:
+    def forward(self, a: flow.Tensor) -> flow.Tensor:
 
         s_initial = a
 
@@ -111,8 +111,8 @@ class AngleResnet(nn.Module):
         self.relu = nn.ReLU()
 
     def forward(
-        self, s: torch.Tensor, s_initial: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        self, s: flow.Tensor, s_initial: flow.Tensor
+    ) -> Tuple[flow.Tensor, flow.Tensor]:
         """
         Args:
             s:
@@ -146,9 +146,9 @@ class AngleResnet(nn.Module):
         s = s.view(s.shape[:-1] + (-1, 2))
 
         unnormalized_s = s
-        norm_denom = torch.sqrt(
-            torch.clamp(
-                torch.sum(s ** 2, dim=-1, keepdim=True),
+        norm_denom = flow.sqrt(
+            flow.clamp(
+                flow.sum(s ** 2, dim=-1, keepdim=True),
                 min=self.eps,
             )
         )
@@ -216,7 +216,7 @@ class InvariantPointAttention(nn.Module):
 
         self.linear_b = Linear(self.c_z, self.no_heads)
 
-        self.head_weights = nn.Parameter(torch.zeros((no_heads)))
+        self.head_weights = nn.Parameter(flow.zeros((no_heads)))
         ipa_point_weights_init_(self.head_weights)
 
         concat_out_dim = self.no_heads * (
@@ -229,14 +229,14 @@ class InvariantPointAttention(nn.Module):
 
     def forward(
         self,
-        s: torch.Tensor,
-        z: Optional[torch.Tensor],
+        s: flow.Tensor,
+        z: Optional[flow.Tensor],
         r: Rigid,
-        mask: torch.Tensor,
+        mask: flow.Tensor,
         inplace_safe: bool = False,
         _offload_inference: bool = False,
-        _z_reference_list: Optional[Sequence[torch.Tensor]] = None,
-    ) -> torch.Tensor:
+        _z_reference_list: Optional[Sequence[flow.Tensor]] = None,
+    ) -> flow.Tensor:
         """
         Args:
             s:
@@ -269,15 +269,15 @@ class InvariantPointAttention(nn.Module):
         kv = kv.view(kv.shape[:-1] + (self.no_heads, -1))
 
         # [*, N_res, H, C_hidden]
-        k, v = torch.split(kv, self.c_hidden, dim=-1)
+        k, v = flow.split(kv, self.c_hidden, dim=-1)
 
         # [*, N_res, H * P_q * 3]
         q_pts = self.linear_q_points(s)
 
         # This is kind of clunky, but it's how the original does it
         # [*, N_res, H * P_q, 3]
-        q_pts = torch.split(q_pts, q_pts.shape[-1] // 3, dim=-1)
-        q_pts = torch.stack(q_pts, dim=-1)
+        q_pts = flow.split(q_pts, q_pts.shape[-1] // 3, dim=-1)
+        q_pts = flow.stack(q_pts, dim=-1)
         q_pts = r[..., None].apply(q_pts)
 
         # [*, N_res, H, P_q, 3]
@@ -289,15 +289,15 @@ class InvariantPointAttention(nn.Module):
         kv_pts = self.linear_kv_points(s)
 
         # [*, N_res, H * (P_q + P_v), 3]
-        kv_pts = torch.split(kv_pts, kv_pts.shape[-1] // 3, dim=-1)
-        kv_pts = torch.stack(kv_pts, dim=-1)
+        kv_pts = flow.split(kv_pts, kv_pts.shape[-1] // 3, dim=-1)
+        kv_pts = flow.stack(kv_pts, dim=-1)
         kv_pts = r[..., None].apply(kv_pts)
 
         # [*, N_res, H, (P_q + P_v), 3]
         kv_pts = kv_pts.view(kv_pts.shape[:-2] + (self.no_heads, -1, 3))
 
         # [*, N_res, H, P_q/P_v, 3]
-        k_pts, v_pts = torch.split(
+        k_pts, v_pts = flow.split(
             kv_pts, [self.no_qk_points, self.no_v_points], dim=-2
         )
 
@@ -312,7 +312,7 @@ class InvariantPointAttention(nn.Module):
             z[0] = z[0].cpu()
 
         # [*, H, N_res, N_res]
-        a = torch.matmul(
+        a = flow.matmul(
             permute_final_dims(q, (1, 0, 2)),  # [*, H, N_res, C_hidden]
             permute_final_dims(k, (1, 2, 0)),  # [*, H, C_hidden, N_res]
         )
@@ -327,7 +327,7 @@ class InvariantPointAttention(nn.Module):
             pt_att = pt_att ** 2
 
         # [*, N_res, N_res, H, P_q]
-        pt_att = sum(torch.unbind(pt_att, dim=-1))
+        pt_att = sum(flow.unbind(pt_att, dim=-1))
         head_weights = self.softplus(self.head_weights).view(
             *((1,) * len(pt_att.shape[:-2]) + (-1, 1))
         )
@@ -340,7 +340,7 @@ class InvariantPointAttention(nn.Module):
             pt_att = pt_att * head_weights
 
         # [*, N_res, N_res, H]
-        pt_att = torch.sum(pt_att, dim=-1) * (-0.5)
+        pt_att = flow.sum(pt_att, dim=-1) * (-0.5)
         # [*, N_res, N_res]
         square_mask = mask.unsqueeze(-1) * mask.unsqueeze(-2)
         square_mask = self.inf * (square_mask - 1)
@@ -348,11 +348,12 @@ class InvariantPointAttention(nn.Module):
         # [*, H, N_res, N_res]
         pt_att = permute_final_dims(pt_att, (2, 0, 1))
         
-        if(inplace_safe):
+        if(inplace_safe and False):
             a += pt_att
             del pt_att
             a += square_mask.unsqueeze(-3)
             # in-place softmax
+            attn_core_inplace_cuda = importlib.import_module("attn_core_inplace_cuda")
             attn_core_inplace_cuda.forward_(
                 a,
                 reduce(mul, a.shape[:-1]),
@@ -367,7 +368,7 @@ class InvariantPointAttention(nn.Module):
         # Compute output
         ################
         # [*, N_res, H, C_hidden]
-        o = torch.matmul(
+        o = flow.matmul(
             a, v.transpose(-2, -3).to(dtype=a.dtype)
         ).transpose(-2, -3)
 
@@ -378,12 +379,12 @@ class InvariantPointAttention(nn.Module):
         if(inplace_safe):
             v_pts = permute_final_dims(v_pts, (1, 3, 0, 2))
             o_pt = [
-                torch.matmul(a, v.to(a.dtype)) 
-                for v in torch.unbind(v_pts, dim=-3)
+                flow.matmul(a, v.to(a.dtype)) 
+                for v in flow.unbind(v_pts, dim=-3)
             ]
-            o_pt = torch.stack(o_pt, dim=-3)
+            o_pt = flow.stack(o_pt, dim=-3)
         else:
-            o_pt = torch.sum(
+            o_pt = flow.sum(
                 (
                     a[..., None, :, :, None]
                     * permute_final_dims(v_pts, (1, 3, 0, 2))[..., None, :, :]
@@ -397,7 +398,7 @@ class InvariantPointAttention(nn.Module):
 
         # [*, N_res, H * P_v]
         o_pt_norm = flatten_final_dims(
-            torch.sqrt(torch.sum(o_pt ** 2, dim=-1) + self.eps), 2
+            flow.sqrt(flow.sum(o_pt ** 2, dim=-1) + self.eps), 2
         )
 
         # [*, N_res, H * P_v, 3]
@@ -407,15 +408,15 @@ class InvariantPointAttention(nn.Module):
             z[0] = z[0].to(o_pt.device)
 
         # [*, N_res, H, C_z]
-        o_pair = torch.matmul(a.transpose(-2, -3), z[0].to(dtype=a.dtype))
+        o_pair = flow.matmul(a.transpose(-2, -3), z[0].to(dtype=a.dtype))
 
         # [*, N_res, H * C_z]
         o_pair = flatten_final_dims(o_pair, 2)
 
         # [*, N_res, C_s]
         s = self.linear_out(
-            torch.cat(
-                (o, *torch.unbind(o_pt, dim=-1), o_pt_norm, o_pair), dim=-1
+            flow.cat(
+                (o, *flow.unbind(o_pt, dim=-1), o_pt_norm, o_pair), dim=-1
             ).to(dtype=z[0].dtype)
         )
         
@@ -439,7 +440,7 @@ class BackboneUpdate(nn.Module):
 
         self.linear = Linear(self.c_s, 6, init="final")
 
-    def forward(self, s: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, s: flow.Tensor) -> Tuple[flow.Tensor, flow.Tensor]:
         """
         Args:
             [*, N_res, C_s] single representation
@@ -740,7 +741,7 @@ class StructureModule(nn.Module):
                 evoformer_output_dict["pair"].to(s.device)
             )
 
-        outputs = dict_multimap(torch.stack, outputs)
+        outputs = dict_multimap(flow.stack, outputs)
         outputs["single"] = s
 
         return outputs
@@ -749,7 +750,7 @@ class StructureModule(nn.Module):
         if not hasattr(self, "default_frames"):
             self.register_buffer(
                 "default_frames",
-                torch.tensor(
+                flow.tensor(
                     restype_rigid_group_default_frame,
                     dtype=float_dtype,
                     device=device,
@@ -760,7 +761,7 @@ class StructureModule(nn.Module):
         if not hasattr(self, "group_idx"):
             self.register_buffer(
                 "group_idx",
-                torch.tensor(
+                flow.tensor(
                     restype_atom14_to_rigid_group,
                     device=device,
                     requires_grad=False,
@@ -770,7 +771,7 @@ class StructureModule(nn.Module):
         if not hasattr(self, "atom_mask"):
             self.register_buffer(
                 "atom_mask",
-                torch.tensor(
+                flow.tensor(
                     restype_atom14_mask,
                     dtype=float_dtype,
                     device=device,
@@ -781,7 +782,7 @@ class StructureModule(nn.Module):
         if not hasattr(self, "lit_positions"):
             self.register_buffer(
                 "lit_positions",
-                torch.tensor(
+                flow.tensor(
                     restype_atom14_rigid_group_positions,
                     dtype=float_dtype,
                     device=device,

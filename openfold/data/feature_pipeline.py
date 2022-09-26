@@ -18,13 +18,13 @@ from typing import Mapping, Tuple, List, Optional, Dict, Sequence
 
 import ml_collections
 import numpy as np
-import torch
+import oneflow as flow
 
 from openfold.data import input_pipeline
 
 
 FeatureDict = Mapping[str, np.ndarray]
-TensorDict = Dict[str, torch.Tensor]
+TensorDict = Dict[str, flow.Tensor]
 
 
 def np_to_tensor_dict(
@@ -42,7 +42,7 @@ def np_to_tensor_dict(
         features are returned, all other ones are filtered out.
     """ 
     tensor_dict = {
-        k: torch.tensor(v) for k, v in np_example.items() if k in features
+        k: flow.tensor(v) for k, v in np_example.items() if k in features
     }
 
     return tensor_dict
@@ -87,7 +87,7 @@ def np_example_to_features(
     tensor_dict = np_to_tensor_dict(
         np_example=np_example, features=feature_names
     )
-    with torch.no_grad():
+    with flow.no_grad():
         features = input_pipeline.process_tensors_from_config(
             tensor_dict,
             cfg.common,

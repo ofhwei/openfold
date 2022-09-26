@@ -13,8 +13,8 @@
 # limitations under the License.
 
 
-import torch
-import torch.nn as nn
+import oneflow as flow
+import oneflow.nn as nn
 from functools import partialmethod
 from typing import Union, List
 
@@ -43,7 +43,7 @@ class Dropout(nn.Module):
         self.batch_dim = batch_dim
         self.dropout = nn.Dropout(self.r)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: flow.Tensor) -> flow.Tensor:
         """
         Args:
             x:

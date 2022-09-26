@@ -15,6 +15,7 @@
 from functools import partial
 import importlib
 import math
+from turtle import forward
 from typing import Optional, Callable, List, Tuple, Sequence
 import numpy as np
 
@@ -28,13 +29,13 @@ if(fa_is_installed):
     from flash_attn.flash_attention import FlashAttention
     from flash_attn.flash_attn_interface import flash_attn_unpadded_kvpacked_func
 
-import torch
-import torch.nn as nn
+import oneflow as flow
+import oneflow.nn as nn
 from scipy.stats import truncnorm
 
 from openfold.utils.checkpointing import get_checkpoint_fn
 from openfold.utils.chunk_utils import _chunk_slice
-from openfold.utils.kernel.attention_core import attention_core
+# from openfold.utils.kernel.attention_core import attention_core
 from openfold.utils.tensor_utils import (
     permute_final_dims,
     flatten_final_dims,
@@ -77,8 +78,8 @@ def trunc_normal_init_(weights, scale=1.0, fan="fan_in"):
     size = _prod(shape)
     samples = truncnorm.rvs(a=a, b=b, loc=0, scale=std, size=size)
     samples = np.reshape(samples, shape)
-    with torch.no_grad():
-        weights.copy_(torch.tensor(samples, device=weights.device))
+    with flow.no_grad():
+        weights.copy_(flow.tensor(samples, dtype=weights.dtype, device=weights.device))
 
 
 def lecun_normal_init_(weights):
@@ -94,21 +95,21 @@ def glorot_uniform_init_(weights):
 
 
 def final_init_(weights):
-    with torch.no_grad():
+    with flow.no_grad():
         weights.fill_(0.0)
 
 
 def gating_init_(weights):
-    with torch.no_grad():
+    with flow.no_grad():
         weights.fill_(0.0)
 
 
 def normal_init_(weights):
-    torch.nn.init.kaiming_normal_(weights, nonlinearity="linear")
+    flow.nn.init.kaiming_normal_(weights, nonlinearity="linear")
 
 
 def ipa_point_weights_init_(weights):
-    with torch.no_grad():
+    with flow.no_grad():
         softplus_inverse_1 = 0.541324854612918
         weights.fill_(softplus_inverse_1)
 
@@ -116,7 +117,7 @@ def ipa_point_weights_init_(weights):
 class Linear(nn.Linear):
     """
     A Linear layer with built-in nonstandard initializations. Called just
-    like torch.nn.Linear.
+    like flow.nn.Linear.
 
     Implements the initializers in 1.11.4, plus some additional ones found
     in the code.
@@ -128,7 +129,7 @@ class Linear(nn.Linear):
         out_dim: int,
         bias: bool = True,
         init: str = "default",
-        init_fn: Optional[Callable[[torch.Tensor, torch.Tensor], None]] = None,
+        init_fn: Optional[Callable[[flow.Tensor, flow.Tensor], None]] = None,
     ):
         """
         Args:
@@ -156,10 +157,10 @@ class Linear(nn.Linear):
         super(Linear, self).__init__(in_dim, out_dim, bias=bias)
 
         if bias:
-            with torch.no_grad():
+            with flow.no_grad():
                 self.bias.fill_(0)
 
-        with torch.no_grad():
+        with flow.no_grad():
             if init_fn is not None:
                 init_fn(self.weight, self.bias)
             else:
@@ -188,8 +189,8 @@ class LayerNorm(nn.Module):
         self.c_in = (c_in,)
         self.eps = eps
 
-        self.weight = nn.Parameter(torch.ones(c_in))
-        self.bias = nn.Parameter(torch.zeros(c_in))
+        self.weight = nn.Parameter(flow.ones(c_in))
+        self.bias = nn.Parameter(flow.zeros(c_in))
 
     def forward(self, x): 
         d = x.dtype
@@ -197,8 +198,8 @@ class LayerNorm(nn.Module):
             deepspeed_is_installed and 
             deepspeed.utils.is_initialized()
         )
-        if(d is torch.bfloat16 and not deepspeed_is_initialized):
-            with torch.cuda.amp.autocast(enabled=False):
+        if(d is flow.bfloat16 and not deepspeed_is_initialized):
+            with flow.cuda.amp.autocast(enabled=False):
                 out = nn.functional.layer_norm(
                     x, 
                     self.c_in, 
@@ -218,8 +219,8 @@ class LayerNorm(nn.Module):
         return out
 
 
-@torch.jit.ignore
-def softmax_no_cast(t: torch.Tensor, dim: int = -1) -> torch.Tensor:
+# @torch.jit.ignore
+def softmax_no_cast(t: flow.Tensor, dim: int = -1) -> flow.Tensor:
     """
         Softmax, but without automatic casting to fp32 when the input is of
         type bfloat16
@@ -229,22 +230,22 @@ def softmax_no_cast(t: torch.Tensor, dim: int = -1) -> torch.Tensor:
         deepspeed_is_installed and 
         deepspeed.utils.is_initialized()
     )
-    if(d is torch.bfloat16 and not deepspeed_is_initialized):
-        with torch.cuda.amp.autocast(enabled=False):
-            s = torch.nn.functional.softmax(t, dim=dim)
+    if(d is flow.bfloat16 and not deepspeed_is_initialized):
+        with flow.cuda.amp.autocast(enabled=False):
+            s = flow.nn.functional.softmax(t, dim=dim)
     else:
-        s = torch.nn.functional.softmax(t, dim=dim)
+        s = flow.nn.functional.softmax(t, dim=dim)
 
     return s
 
 
-#@torch.jit.script
-def _attention(query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, biases: List[torch.Tensor]) -> torch.Tensor:
+#@flow.jit.script
+def _attention(query: flow.Tensor, key: flow.Tensor, value: flow.Tensor, biases: List[flow.Tensor]) -> flow.Tensor:
     # [*, H, C_hidden, K]
     key = permute_final_dims(key, (1, 0))
 
     # [*, H, Q, K]
-    a = torch.matmul(query, key)
+    a = flow.matmul(query, key)
 
     for b in biases:
         a += b
@@ -252,12 +253,12 @@ def _attention(query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, bias
     a = softmax_no_cast(a, -1)
 
     # [*, H, Q, C_hidden]
-    a = torch.matmul(a, value)
+    a = flow.matmul(a, value)
 
     return a
 
 
-@torch.jit.ignore
+# @torch.jit.ignore
 def _attention_chunked_trainable(
     query, key, value, biases, chunk_size, chunk_dim, checkpoint, 
 ):
@@ -308,7 +309,7 @@ def _attention_chunked_trainable(
         o_chunk = o_chunk.transpose(-2, -3)
         o_chunks.append(o_chunk)
 
-    o = torch.cat(o_chunks, dim=chunk_dim)
+    o = flow.cat(o_chunks, dim=chunk_dim)
     return o
 
 
@@ -375,10 +376,10 @@ class Attention(nn.Module):
         self.sigmoid = nn.Sigmoid()
 
     def _prep_qkv(self,
-        q_x: torch.Tensor, 
-        kv_x: torch.Tensor
+        q_x: flow.Tensor, 
+        kv_x: flow.Tensor
     ) -> Tuple[
-        torch.Tensor, torch.Tensor, torch.Tensor
+        flow.Tensor, flow.Tensor, flow.Tensor
     ]:
         # [*, Q/K/V, H * C_hidden]
         q = self.linear_q(q_x)
@@ -400,9 +401,9 @@ class Attention(nn.Module):
         return q, k, v
 
     def _wrap_up(self,
-        o: torch.Tensor, 
-        q_x: torch.Tensor
-    ) -> torch.Tensor:
+        o: flow.Tensor, 
+        q_x: flow.Tensor
+    ) -> flow.Tensor:
         if(self.linear_g is not None):
             g = self.sigmoid(self.linear_g(q_x))
         
@@ -420,16 +421,16 @@ class Attention(nn.Module):
 
     def forward(
         self,
-        q_x: torch.Tensor,
-        kv_x: torch.Tensor,
-        biases: Optional[List[torch.Tensor]] = None,
+        q_x: flow.Tensor,
+        kv_x: flow.Tensor,
+        biases: Optional[List[flow.Tensor]] = None,
         use_memory_efficient_kernel: bool = False,
         use_lma: bool = False,
         lma_q_chunk_size: int = DEFAULT_LMA_Q_CHUNK_SIZE,
         lma_kv_chunk_size: int = DEFAULT_LMA_KV_CHUNK_SIZE,
         use_flash: bool = False,
-        flash_mask: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
+        flash_mask: Optional[flow.Tensor] = None,
+    ) -> flow.Tensor:
         """
         Args:
             q_x:
@@ -441,11 +442,11 @@ class Attention(nn.Module):
             use_memory_efficient_kernel:
                 Whether to use a custom memory-efficient attention kernel.
                 This should be the default choice for most. If none of the
-                "use_<...>" flags are True, a stock PyTorch implementation
+                "use_<...>" flags are True, a stock Pyflow implementation
                 is used instead
             use_lma:
                 Whether to use low-memory attention (Staats & Rabe 2021). If
-                none of the "use_<...>" flags are True, a stock PyTorch 
+                none of the "use_<...>" flags are True, a stock Pyflow 
                 implementation is used instead
             lma_q_chunk_size:
                 Query chunk size (for LMA)
@@ -479,12 +480,13 @@ class Attention(nn.Module):
         q, k, v = self._prep_qkv(q_x, kv_x)
 
         # [*, Q, H, C_hidden]
-        if(use_memory_efficient_kernel):
+        if(use_memory_efficient_kernel and False):
             if(len(biases) > 2):
                 raise ValueError(
                     "If use_memory_efficient_kernel is True, you may only "
                     "provide up to two bias terms"
                 )
+            from openfold.utils.kernel.attention_core import attention_core
             o = attention_core(q, k, v, *((biases + [None] * 2)[:2]))
             o = o.transpose(-2, -3)
         elif(use_lma):
@@ -531,13 +533,13 @@ class GlobalAttention(nn.Module):
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, 
-        m: torch.Tensor, 
-        mask: torch.Tensor,
+        m: flow.Tensor, 
+        mask: flow.Tensor,
         use_lma: bool = False,
-    ) -> torch.Tensor:
+    ) -> flow.Tensor:
         # [*, N_res, C_in]
-        q = torch.sum(m * mask.unsqueeze(-1), dim=-2) / (
-            torch.sum(mask, dim=-1)[..., None] + self.eps
+        q = flow.sum(m * mask.unsqueeze(-1), dim=-2) / (
+            flow.sum(mask, dim=-1)[..., None] + self.eps
         )
 
         # [*, N_res, H * C_hidden]
@@ -554,7 +556,7 @@ class GlobalAttention(nn.Module):
         bias = (self.inf * (mask - 1))[..., :, None, :]
         if(not use_lma):
             # [*, N_res, H, N_seq]
-            a = torch.matmul(
+            a = flow.matmul(
                 q,
                 k.transpose(-1, -2),  # [*, N_res, C_hidden, N_seq]
             )
@@ -562,7 +564,7 @@ class GlobalAttention(nn.Module):
             a = softmax_no_cast(a)
 
             # [*, N_res, H, C_hidden]
-            o = torch.matmul(
+            o = flow.matmul(
                 a,
                 v,
             )
@@ -595,10 +597,10 @@ class GlobalAttention(nn.Module):
 
 
 def _lma(
-    q: torch.Tensor, 
-    k: torch.Tensor, 
-    v: torch.Tensor, 
-    biases: List[torch.Tensor], 
+    q: flow.Tensor, 
+    k: flow.Tensor, 
+    v: flow.Tensor, 
+    biases: List[flow.Tensor], 
     q_chunk_size: int, 
     kv_chunk_size: int,
 ):
@@ -622,32 +624,32 @@ def _lma(
                 b[..., kv_s: kv_s + kv_chunk_size] for b in large_bias_chunks
             ]
 
-            a = torch.einsum(
+            a = flow.einsum(
                 "...hqd,...hkd->...hqk", q_chunk, k_chunk,
             )
        
             for b in small_bias_chunks:
                 a += b
         
-            max_a = torch.max(a, dim=-1, keepdim=True)[0]
-            exp_a = torch.exp(a - max_a)
-            exp_v = torch.einsum("...hvf,...hqv->...hqf", v_chunk, exp_a)
+            max_a = flow.max(a, dim=-1, keepdim=True)[0]
+            exp_a = flow.exp(a - max_a)
+            exp_v = flow.einsum("...hvf,...hqv->...hqf", v_chunk, exp_a)
  
             maxes.append(max_a.detach().squeeze(-1))
-            weights.append(torch.sum(exp_a, dim=-1))
+            weights.append(flow.sum(exp_a, dim=-1))
             values.append(exp_v)
 
-        chunk_max = torch.stack(maxes, dim=-3)
-        chunk_weights = torch.stack(weights, dim=-3)
-        chunk_values = torch.stack(values, dim=-4)
+        chunk_max = flow.stack(maxes, dim=-3)
+        chunk_weights = flow.stack(weights, dim=-3)
+        chunk_values = flow.stack(values, dim=-4)
 
-        global_max = torch.max(chunk_max, dim=-3, keepdim=True)[0]
-        max_diffs = torch.exp(chunk_max - global_max)
+        global_max = flow.max(chunk_max, dim=-3, keepdim=True)[0]
+        max_diffs = flow.exp(chunk_max - global_max)
         chunk_values = chunk_values * max_diffs.unsqueeze(-1)
         chunk_weights = chunk_weights * max_diffs
 
-        all_values = torch.sum(chunk_values, dim=-4)
-        all_weights = torch.sum(chunk_weights.unsqueeze(-1), dim=-4)
+        all_values = flow.sum(chunk_values, dim=-4)
+        all_weights = flow.sum(chunk_weights.unsqueeze(-1), dim=-4)
 
         q_chunk_out = all_values / all_weights
 
@@ -656,7 +658,7 @@ def _lma(
     return o
 
 
-@torch.jit.ignore
+# @flow.jit.ignore
 def _flash_attn(q, k, v, kv_mask):
     if(not fa_is_installed):
         raise ValueError(
@@ -689,12 +691,12 @@ def _flash_attn(q, k, v, kv_mask):
     q = q.reshape(-1, *q.shape[-2:])
     
     q_max_s = n
-    q_cu_seqlens = torch.arange(
-        0, (batch_size + 1) * n, step=n, dtype=torch.int32, device=q.device
+    q_cu_seqlens = flow.arange(
+        0, (batch_size + 1) * n, step=n, dtype=flow.int32, device=q.device
     )
 
     # [B_flat, N, 2, H, C]
-    kv = torch.stack([k, v], dim=-3) 
+    kv = flow.stack([k, v], dim=-3) 
     kv_shape = kv.shape
     
     # [B_flat, N, 2 * H * C]

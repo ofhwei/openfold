@@ -13,8 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import torch
-import torch.nn as nn
+import oneflow as flow
+import oneflow.nn as nn
 
 from openfold.model.primitives import Linear, LayerNorm
 from openfold.utils.loss import (

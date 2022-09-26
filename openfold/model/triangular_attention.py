@@ -17,8 +17,8 @@ from functools import partialmethod, partial
 import math
 from typing import Optional, List
 
-import torch
-import torch.nn as nn
+import oneflow as flow
+import oneflow.nn as nn
 
 from openfold.model.primitives import Linear, LayerNorm, Attention
 from openfold.utils.chunk_utils import chunk_layer
@@ -57,15 +57,15 @@ class TriangleAttention(nn.Module):
             self.c_in, self.c_in, self.c_in, self.c_hidden, self.no_heads
         )
 
-    @torch.jit.ignore
+    # @flow.jit.ignore
     def _chunk(self,
-        x: torch.Tensor,
-        biases: List[torch.Tensor],
+        x: flow.Tensor,
+        biases: List[flow.Tensor],
         chunk_size: int,
         use_memory_efficient_kernel: bool = False,
         use_lma: bool = False,
         inplace_safe: bool = False,
-    ) -> torch.Tensor:
+    ) -> flow.Tensor:
         "triangle! triangle!"
         mha_inputs = {
             "q_x": x,
@@ -86,13 +86,13 @@ class TriangleAttention(nn.Module):
         )
 
     def forward(self, 
-        x: torch.Tensor, 
-        mask: Optional[torch.Tensor] = None,
+        x: flow.Tensor, 
+        mask: Optional[flow.Tensor] = None,
         chunk_size: Optional[int] = None,
         use_memory_efficient_kernel: bool = False,
         use_lma: bool = False,
         inplace_safe: bool = False,
-    ) -> torch.Tensor:
+    ) -> flow.Tensor:
         """
         Args:
             x:

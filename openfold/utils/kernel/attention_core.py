@@ -15,15 +15,15 @@ import importlib
 from functools import reduce
 from operator import mul
 
-import torch
+import oneflow as flow
 
-attn_core_inplace_cuda = importlib.import_module("attn_core_inplace_cuda")
-
-
-SUPPORTED_DTYPES = [torch.float32, torch.bfloat16]
+# attn_core_inplace_cuda = importlib.import_module("attn_core_inplace_cuda")
 
 
-class AttentionCoreFunction(torch.autograd.Function):
+SUPPORTED_DTYPES = [flow.float32, flow.bfloat16]
+
+
+class AttentionCoreFunction(flow.autograd.Function):
     @staticmethod
     def forward(ctx, q, k, v, bias_1=None, bias_2=None):
         if(bias_1 is None and bias_2 is not None):
@@ -35,7 +35,7 @@ class AttentionCoreFunction(torch.autograd.Function):
         k = k.contiguous()
 
         # [*, H, Q, K] 
-        attention_logits = torch.matmul(
+        attention_logits = flow.matmul(
             q, k.transpose(-1, -2), 
         )
 
@@ -50,7 +50,7 @@ class AttentionCoreFunction(torch.autograd.Function):
             attention_logits.shape[-1],
         )
 
-        o = torch.matmul(attention_logits, v) 
+        o = flow.matmul(attention_logits, v) 
 
         ctx.bias_1_shape = bias_1.shape if bias_1 is not None else None
         ctx.bias_2_shape = bias_2.shape if bias_2 is not None else None
@@ -63,7 +63,7 @@ class AttentionCoreFunction(torch.autograd.Function):
         q, k, v, attention_logits = ctx.saved_tensors
         grad_q = grad_k = grad_v = grad_bias_1 = grad_bias_2 = None
        
-        grad_v = torch.matmul(
+        grad_v = flow.matmul(
             attention_logits.transpose(-1, -2), 
             grad_output
         )
@@ -78,23 +78,23 @@ class AttentionCoreFunction(torch.autograd.Function):
         )
 
         if(ctx.bias_1_shape is not None):
-            grad_bias_1 = torch.sum(
+            grad_bias_1 = flow.sum(
                 attention_logits,
                 dim=tuple(i for i,d in enumerate(ctx.bias_1_shape) if d == 1),
                 keepdim=True,
             )
 
         if(ctx.bias_2_shape is not None):
-            grad_bias_2 = torch.sum(
+            grad_bias_2 = flow.sum(
                 attention_logits,
                 dim=tuple(i for i,d in enumerate(ctx.bias_2_shape) if d == 1),
                 keepdim=True,
             )
 
-        grad_q = torch.matmul(
+        grad_q = flow.matmul(
             attention_logits, k
         )
-        grad_k = torch.matmul(
+        grad_k = flow.matmul(
             q.transpose(-1, -2), attention_logits,
         ).transpose(-1, -2)
 

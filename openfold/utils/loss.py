@@ -17,9 +17,9 @@ from functools import partial
 import logging
 import ml_collections
 import numpy as np
-import torch
-import torch.nn as nn
-from torch.distributions.bernoulli import Bernoulli
+import oneflow as flow
+import oneflow.nn as nn
+# from oneflow.distributions.bernoulli import Bernoulli
 from typing import Dict, Optional, Tuple
 
 from openfold.np import residue_constants
@@ -35,8 +35,8 @@ from openfold.utils.tensor_utils import (
 
 
 def softmax_cross_entropy(logits, labels):
-    loss = -1 * torch.sum(
-        labels * torch.nn.functional.log_softmax(logits, dim=-1),
+    loss = -1 * flow.sum(
+        labels * flow.nn.functional.log_softmax(logits, dim=-1),
         dim=-1,
     )
     return loss
@@ -46,10 +46,10 @@ def sigmoid_cross_entropy(logits, labels):
     logits_dtype = logits.dtype
     logits = logits.double()
     labels = labels.double()
-    log_p = torch.nn.functional.logsigmoid(logits)
-    # log_p = torch.log(torch.sigmoid(logits))
-    log_not_p = torch.nn.functional.logsigmoid(-1 * logits)
-    # log_not_p = torch.log(torch.sigmoid(-logits))
+    log_p = flow.nn.functional.logsigmoid(logits)
+    # log_p = flow.log(flow.sigmoid(logits))
+    log_not_p = flow.nn.functional.logsigmoid(-1 * logits)
+    # log_not_p = flow.log(flow.sigmoid(-logits))
     loss = (-1. * labels) * log_p - (1. - labels) * log_not_p
     loss = loss.to(dtype=logits_dtype)
     return loss
@@ -61,19 +61,19 @@ def torsion_angle_loss(
     a_alt_gt,  # [*, N, 7, 2]
 ):
     # [*, N, 7]
-    norm = torch.norm(a, dim=-1)
+    norm = flow.norm(a, dim=-1)
 
     # [*, N, 7, 2]
     a = a / norm.unsqueeze(-1)
 
     # [*, N, 7]
-    diff_norm_gt = torch.norm(a - a_gt, dim=-1)
-    diff_norm_alt_gt = torch.norm(a - a_alt_gt, dim=-1)
-    min_diff = torch.minimum(diff_norm_gt ** 2, diff_norm_alt_gt ** 2)
+    diff_norm_gt = flow.norm(a - a_gt, dim=-1)
+    diff_norm_alt_gt = flow.norm(a - a_alt_gt, dim=-1)
+    min_diff = flow.minimum(diff_norm_gt ** 2, diff_norm_alt_gt ** 2)
 
     # [*]
-    l_torsion = torch.mean(min_diff, dim=(-1, -2))
-    l_angle_norm = torch.mean(torch.abs(norm - 1), dim=(-1, -2))
+    l_torsion = flow.mean(min_diff, dim=(-1, -2))
+    l_angle_norm = flow.mean(flow.abs(norm - 1), dim=(-1, -2))
 
     an_weight = 0.02
     return l_torsion + an_weight * l_angle_norm
@@ -82,14 +82,14 @@ def torsion_angle_loss(
 def compute_fape(
     pred_frames: Rigid,
     target_frames: Rigid,
-    frames_mask: torch.Tensor,
-    pred_positions: torch.Tensor,
-    target_positions: torch.Tensor,
-    positions_mask: torch.Tensor,
+    frames_mask: flow.Tensor,
+    pred_positions: flow.Tensor,
+    target_positions: flow.Tensor,
+    positions_mask: flow.Tensor,
     length_scale: float,
     l1_clamp_distance: Optional[float] = None,
     eps=1e-8,
-) -> torch.Tensor:
+) -> flow.Tensor:
     """
         Computes FAPE loss.
 
@@ -123,12 +123,12 @@ def compute_fape(
         target_positions[..., None, :, :],
     )
 
-    error_dist = torch.sqrt(
-        torch.sum((local_pred_pos - local_target_pos) ** 2, dim=-1) + eps
+    error_dist = flow.sqrt(
+        flow.sum((local_pred_pos - local_target_pos) ** 2, dim=-1) + eps
     )
 
     if l1_clamp_distance is not None:
-        error_dist = torch.clamp(error_dist, min=0, max=l1_clamp_distance)
+        error_dist = flow.clamp(error_dist, min=0, max=l1_clamp_distance)
 
     normed_error = error_dist / length_scale
     normed_error = normed_error * frames_mask[..., None]
@@ -137,32 +137,32 @@ def compute_fape(
     # FP16-friendly averaging. Roughly equivalent to:
     #
     # norm_factor = (
-    #     torch.sum(frames_mask, dim=-1) *
-    #     torch.sum(positions_mask, dim=-1)
+    #     flow.sum(frames_mask, dim=-1) *
+    #     flow.sum(positions_mask, dim=-1)
     # )
-    # normed_error = torch.sum(normed_error, dim=(-1, -2)) / (eps + norm_factor)
+    # normed_error = flow.sum(normed_error, dim=(-1, -2)) / (eps + norm_factor)
     #
     # ("roughly" because eps is necessarily duplicated in the latter)
-    normed_error = torch.sum(normed_error, dim=-1)
+    normed_error = flow.sum(normed_error, dim=-1)
     normed_error = (
-        normed_error / (eps + torch.sum(frames_mask, dim=-1))[..., None]
+        normed_error / (eps + flow.sum(frames_mask, dim=-1))[..., None]
     )
-    normed_error = torch.sum(normed_error, dim=-1)
-    normed_error = normed_error / (eps + torch.sum(positions_mask, dim=-1))
+    normed_error = flow.sum(normed_error, dim=-1)
+    normed_error = normed_error / (eps + flow.sum(positions_mask, dim=-1))
 
     return normed_error
 
 
 def backbone_loss(
-    backbone_rigid_tensor: torch.Tensor,
-    backbone_rigid_mask: torch.Tensor,
-    traj: torch.Tensor,
-    use_clamped_fape: Optional[torch.Tensor] = None,
+    backbone_rigid_tensor: flow.Tensor,
+    backbone_rigid_mask: flow.Tensor,
+    traj: flow.Tensor,
+    use_clamped_fape: Optional[flow.Tensor] = None,
     clamp_distance: float = 10.0,
     loss_unit_distance: float = 10.0,
     eps: float = 1e-4,
     **kwargs,
-) -> torch.Tensor:
+) -> flow.Tensor:
     pred_aff = Rigid.from_tensor_7(traj)
     pred_aff = Rigid(
         Rotation(rot_mats=pred_aff.get_rots().get_rot_mats(), quats=None),
@@ -206,25 +206,25 @@ def backbone_loss(
         )
 
     # Average over the batch dimension
-    fape_loss = torch.mean(fape_loss)
+    fape_loss = flow.mean(fape_loss)
 
     return fape_loss
 
 
 def sidechain_loss(
-    sidechain_frames: torch.Tensor,
-    sidechain_atom_pos: torch.Tensor,
-    rigidgroups_gt_frames: torch.Tensor,
-    rigidgroups_alt_gt_frames: torch.Tensor,
-    rigidgroups_gt_exists: torch.Tensor,
-    renamed_atom14_gt_positions: torch.Tensor,
-    renamed_atom14_gt_exists: torch.Tensor,
-    alt_naming_is_better: torch.Tensor,
+    sidechain_frames: flow.Tensor,
+    sidechain_atom_pos: flow.Tensor,
+    rigidgroups_gt_frames: flow.Tensor,
+    rigidgroups_alt_gt_frames: flow.Tensor,
+    rigidgroups_gt_exists: flow.Tensor,
+    renamed_atom14_gt_positions: flow.Tensor,
+    renamed_atom14_gt_exists: flow.Tensor,
+    alt_naming_is_better: flow.Tensor,
     clamp_distance: float = 10.0,
     length_scale: float = 10.0,
     eps: float = 1e-4,
     **kwargs,
-) -> torch.Tensor:
+) -> flow.Tensor:
     renamed_gt_frames = (
         1.0 - alt_naming_is_better[..., None, None, None]
     ) * rigidgroups_gt_frames + alt_naming_is_better[
@@ -262,10 +262,10 @@ def sidechain_loss(
 
 
 def fape_loss(
-    out: Dict[str, torch.Tensor],
-    batch: Dict[str, torch.Tensor],
+    out: Dict[str, flow.Tensor],
+    batch: Dict[str, flow.Tensor],
     config: ml_collections.ConfigDict,
-) -> torch.Tensor:
+) -> flow.Tensor:
     bb_loss = backbone_loss(
         traj=out["sm"]["frames"],
         **{**batch, **config.backbone},
@@ -280,23 +280,23 @@ def fape_loss(
     loss = config.backbone.weight * bb_loss + config.sidechain.weight * sc_loss
     
     # Average over the batch dimension
-    loss = torch.mean(loss)
+    loss = flow.mean(loss)
 
     return loss
 
 
 def supervised_chi_loss(
-    angles_sin_cos: torch.Tensor,
-    unnormalized_angles_sin_cos: torch.Tensor,
-    aatype: torch.Tensor,
-    seq_mask: torch.Tensor,
-    chi_mask: torch.Tensor,
-    chi_angles_sin_cos: torch.Tensor,
+    angles_sin_cos: flow.Tensor,
+    unnormalized_angles_sin_cos: flow.Tensor,
+    aatype: flow.Tensor,
+    seq_mask: flow.Tensor,
+    chi_mask: flow.Tensor,
+    chi_angles_sin_cos: flow.Tensor,
     chi_weight: float,
     angle_norm_weight: float,
     eps=1e-6,
     **kwargs,
-) -> torch.Tensor:
+) -> flow.Tensor:
     """
         Implements Algorithm 27 (torsionAngleLoss)
 
@@ -321,11 +321,11 @@ def supervised_chi_loss(
             [*] loss tensor
     """
     pred_angles = angles_sin_cos[..., 3:, :]
-    residue_type_one_hot = torch.nn.functional.one_hot(
+    residue_type_one_hot = flow.nn.functional.one_hot(
         aatype,
         residue_constants.restype_num + 1,
     )
-    chi_pi_periodic = torch.einsum(
+    chi_pi_periodic = flow.einsum(
         "...ij,jk->ik",
         residue_type_one_hot.type(angles_sin_cos.dtype),
         angles_sin_cos.new_tensor(residue_constants.chi_pi_periodic),
@@ -335,11 +335,11 @@ def supervised_chi_loss(
 
     shifted_mask = (1 - 2 * chi_pi_periodic).unsqueeze(-1)
     true_chi_shifted = shifted_mask * true_chi
-    sq_chi_error = torch.sum((true_chi - pred_angles) ** 2, dim=-1)
-    sq_chi_error_shifted = torch.sum(
+    sq_chi_error = flow.sum((true_chi - pred_angles) ** 2, dim=-1)
+    sq_chi_error_shifted = flow.sum(
         (true_chi_shifted - pred_angles) ** 2, dim=-1
     )
-    sq_chi_error = torch.minimum(sq_chi_error, sq_chi_error_shifted)
+    sq_chi_error = flow.minimum(sq_chi_error, sq_chi_error_shifted)
     
     # The ol' switcheroo
     sq_chi_error = sq_chi_error.permute(
@@ -352,10 +352,10 @@ def supervised_chi_loss(
 
     loss = chi_weight * sq_chi_loss
 
-    angle_norm = torch.sqrt(
-        torch.sum(unnormalized_angles_sin_cos ** 2, dim=-1) + eps
+    angle_norm = flow.sqrt(
+        flow.sum(unnormalized_angles_sin_cos ** 2, dim=-1) + eps
     )
-    norm_error = torch.abs(angle_norm - 1.0)
+    norm_error = flow.abs(angle_norm - 1.0)
     norm_error = norm_error.permute(
         *range(len(norm_error.shape))[1:-2], 0, -2, -1
     )
@@ -366,19 +366,19 @@ def supervised_chi_loss(
     loss = loss + angle_norm_weight * angle_norm_loss
 
     # Average over the batch dimension
-    loss = torch.mean(loss)
+    loss = flow.mean(loss)
 
     return loss
 
 
-def compute_plddt(logits: torch.Tensor) -> torch.Tensor:
+def compute_plddt(logits: flow.Tensor) -> flow.Tensor:
     num_bins = logits.shape[-1]
     bin_width = 1.0 / num_bins
-    bounds = torch.arange(
+    bounds = flow.arange(
         start=0.5 * bin_width, end=1.0, step=bin_width, device=logits.device
     )
-    probs = torch.nn.functional.softmax(logits, dim=-1)
-    pred_lddt_ca = torch.sum(
+    probs = flow.nn.functional.softmax(logits, dim=-1)
+    pred_lddt_ca = flow.sum(
         probs * bounds.view(*((1,) * len(probs.shape[:-1])), *bounds.shape),
         dim=-1,
     )
@@ -386,17 +386,17 @@ def compute_plddt(logits: torch.Tensor) -> torch.Tensor:
 
 
 def lddt(
-    all_atom_pred_pos: torch.Tensor,
-    all_atom_positions: torch.Tensor,
-    all_atom_mask: torch.Tensor,
+    all_atom_pred_pos: flow.Tensor,
+    all_atom_positions: flow.Tensor,
+    all_atom_mask: flow.Tensor,
     cutoff: float = 15.0,
     eps: float = 1e-10,
     per_residue: bool = True,
-) -> torch.Tensor:
+) -> flow.Tensor:
     n = all_atom_mask.shape[-2]
-    dmat_true = torch.sqrt(
+    dmat_true = flow.sqrt(
         eps
-        + torch.sum(
+        + flow.sum(
             (
                 all_atom_positions[..., None, :]
                 - all_atom_positions[..., None, :, :]
@@ -406,9 +406,9 @@ def lddt(
         )
     )
 
-    dmat_pred = torch.sqrt(
+    dmat_pred = flow.sqrt(
         eps
-        + torch.sum(
+        + flow.sum(
             (
                 all_atom_pred_pos[..., None, :]
                 - all_atom_pred_pos[..., None, :, :]
@@ -421,10 +421,10 @@ def lddt(
         (dmat_true < cutoff)
         * all_atom_mask
         * permute_final_dims(all_atom_mask, (1, 0))
-        * (1.0 - torch.eye(n, device=all_atom_mask.device))
+        * (1.0 - flow.eye(n, device=all_atom_mask.device))
     )
 
-    dist_l1 = torch.abs(dmat_true - dmat_pred)
+    dist_l1 = flow.abs(dmat_true - dmat_pred)
 
     score = (
         (dist_l1 < 0.5).type(dist_l1.dtype)
@@ -435,20 +435,20 @@ def lddt(
     score = score * 0.25
 
     dims = (-1,) if per_residue else (-2, -1)
-    norm = 1.0 / (eps + torch.sum(dists_to_score, dim=dims))
-    score = norm * (eps + torch.sum(dists_to_score * score, dim=dims))
+    norm = 1.0 / (eps + flow.sum(dists_to_score, dim=dims))
+    score = norm * (eps + flow.sum(dists_to_score * score, dim=dims))
 
     return score
 
 
 def lddt_ca(
-    all_atom_pred_pos: torch.Tensor,
-    all_atom_positions: torch.Tensor,
-    all_atom_mask: torch.Tensor,
+    all_atom_pred_pos: flow.Tensor,
+    all_atom_positions: flow.Tensor,
+    all_atom_mask: flow.Tensor,
     cutoff: float = 15.0,
     eps: float = 1e-10,
     per_residue: bool = True,
-) -> torch.Tensor:
+) -> flow.Tensor:
     ca_pos = residue_constants.atom_order["CA"]
     all_atom_pred_pos = all_atom_pred_pos[..., ca_pos, :]
     all_atom_positions = all_atom_positions[..., ca_pos, :]
@@ -465,18 +465,18 @@ def lddt_ca(
 
 
 def lddt_loss(
-    logits: torch.Tensor,
-    all_atom_pred_pos: torch.Tensor,
-    all_atom_positions: torch.Tensor,
-    all_atom_mask: torch.Tensor,
-    resolution: torch.Tensor,
+    logits: flow.Tensor,
+    all_atom_pred_pos: flow.Tensor,
+    all_atom_positions: flow.Tensor,
+    all_atom_mask: flow.Tensor,
+    resolution: flow.Tensor,
     cutoff: float = 15.0,
     no_bins: int = 50,
     min_resolution: float = 0.1,
     max_resolution: float = 3.0,
     eps: float = 1e-10,
     **kwargs,
-) -> torch.Tensor:
+) -> flow.Tensor:
     n = all_atom_mask.shape[-2]
 
     ca_pos = residue_constants.atom_order["CA"]
@@ -494,16 +494,16 @@ def lddt_loss(
 
     score = score.detach()
 
-    bin_index = torch.floor(score * no_bins).long()
-    bin_index = torch.clamp(bin_index, max=(no_bins - 1))
-    lddt_ca_one_hot = torch.nn.functional.one_hot(
+    bin_index = flow.floor(score * no_bins).long()
+    bin_index = flow.clamp(bin_index, max=(no_bins - 1))
+    lddt_ca_one_hot = flow.nn.functional.one_hot(
         bin_index, num_classes=no_bins
     )
 
     errors = softmax_cross_entropy(logits, lddt_ca_one_hot)
     all_atom_mask = all_atom_mask.squeeze(-1)
-    loss = torch.sum(errors * all_atom_mask, dim=-1) / (
-        eps + torch.sum(all_atom_mask, dim=-1)
+    loss = flow.sum(errors * all_atom_mask, dim=-1) / (
+        eps + flow.sum(all_atom_mask, dim=-1)
     )
 
     loss = loss * (
@@ -511,7 +511,7 @@ def lddt_loss(
     )
 
     # Average over the batch dimension
-    loss = torch.mean(loss)
+    loss = flow.mean(loss)
 
     return loss
 
@@ -526,7 +526,7 @@ def distogram_loss(
     eps=1e-6,
     **kwargs,
 ):
-    boundaries = torch.linspace(
+    boundaries = flow.linspace(
         min_bin,
         max_bin,
         no_bins - 1,
@@ -534,62 +534,62 @@ def distogram_loss(
     )
     boundaries = boundaries ** 2
     
-    dists = torch.sum(
+    dists = flow.sum(
         (pseudo_beta[..., None, :] - pseudo_beta[..., None, :, :]) ** 2,
         dim=-1,
         keepdims=True,
     )
 
-    true_bins = torch.sum(dists > boundaries, dim=-1)
+    true_bins = flow.sum(dists > boundaries, dim=-1)
 
     errors = softmax_cross_entropy(
         logits,
-        torch.nn.functional.one_hot(true_bins, no_bins),
+        flow.nn.functional.one_hot(true_bins, no_bins),
     )
 
     square_mask = pseudo_beta_mask[..., None] * pseudo_beta_mask[..., None, :]
 
     # FP16-friendly sum. Equivalent to:
-    # mean = (torch.sum(errors * square_mask, dim=(-1, -2)) /
-    #         (eps + torch.sum(square_mask, dim=(-1, -2))))
-    denom = eps + torch.sum(square_mask, dim=(-1, -2))
+    # mean = (flow.sum(errors * square_mask, dim=(-1, -2)) /
+    #         (eps + flow.sum(square_mask, dim=(-1, -2))))
+    denom = eps + flow.sum(square_mask, dim=(-1, -2))
     mean = errors * square_mask
-    mean = torch.sum(mean, dim=-1)
+    mean = flow.sum(mean, dim=-1)
     mean = mean / denom[..., None]
-    mean = torch.sum(mean, dim=-1)
+    mean = flow.sum(mean, dim=-1)
 
     # Average over the batch dimensions
-    mean = torch.mean(mean)
+    mean = flow.mean(mean)
 
     return mean
 
 
-def _calculate_bin_centers(boundaries: torch.Tensor):
+def _calculate_bin_centers(boundaries: flow.Tensor):
     step = boundaries[1] - boundaries[0]
     bin_centers = boundaries + step / 2
-    bin_centers = torch.cat(
+    bin_centers = flow.cat(
         [bin_centers, (bin_centers[-1] + step).unsqueeze(-1)], dim=0
     )
     return bin_centers
 
 
 def _calculate_expected_aligned_error(
-    alignment_confidence_breaks: torch.Tensor,
-    aligned_distance_error_probs: torch.Tensor,
-) -> Tuple[torch.Tensor, torch.Tensor]:
+    alignment_confidence_breaks: flow.Tensor,
+    aligned_distance_error_probs: flow.Tensor,
+) -> Tuple[flow.Tensor, flow.Tensor]:
     bin_centers = _calculate_bin_centers(alignment_confidence_breaks)
     return (
-        torch.sum(aligned_distance_error_probs * bin_centers, dim=-1),
+        flow.sum(aligned_distance_error_probs * bin_centers, dim=-1),
         bin_centers[-1],
     )
 
 
 def compute_predicted_aligned_error(
-    logits: torch.Tensor,
+    logits: flow.Tensor,
     max_bin: int = 31,
     no_bins: int = 64,
     **kwargs,
-) -> Dict[str, torch.Tensor]:
+) -> Dict[str, flow.Tensor]:
     """Computes aligned confidence metrics from logits.
 
     Args:
@@ -604,11 +604,11 @@ def compute_predicted_aligned_error(
         error for each pair of residues.
       max_predicted_aligned_error: [*] the maximum predicted error possible.
     """
-    boundaries = torch.linspace(
+    boundaries = flow.linspace(
         0, max_bin, steps=(no_bins - 1), device=logits.device
     )
 
-    aligned_confidence_probs = torch.nn.functional.softmax(logits, dim=-1)
+    aligned_confidence_probs = flow.nn.functional.softmax(logits, dim=-1)
     (
         predicted_aligned_error,
         max_predicted_aligned_error,
@@ -625,38 +625,38 @@ def compute_predicted_aligned_error(
 
 
 def compute_tm(
-    logits: torch.Tensor,
-    residue_weights: Optional[torch.Tensor] = None,
+    logits: flow.Tensor,
+    residue_weights: Optional[flow.Tensor] = None,
     max_bin: int = 31,
     no_bins: int = 64,
     eps: float = 1e-8,
     **kwargs,
-) -> torch.Tensor:
+) -> flow.Tensor:
     if residue_weights is None:
         residue_weights = logits.new_ones(logits.shape[-2])
 
-    boundaries = torch.linspace(
+    boundaries = flow.linspace(
         0, max_bin, steps=(no_bins - 1), device=logits.device
     )
 
     bin_centers = _calculate_bin_centers(boundaries)
-    torch.sum(residue_weights)
+    flow.sum(residue_weights)
     n = logits.shape[-2]
     clipped_n = max(n, 19)
 
     d0 = 1.24 * (clipped_n - 15) ** (1.0 / 3) - 1.8
 
-    probs = torch.nn.functional.softmax(logits, dim=-1)
+    probs = flow.nn.functional.softmax(logits, dim=-1)
 
     tm_per_bin = 1.0 / (1 + (bin_centers ** 2) / (d0 ** 2))
-    predicted_tm_term = torch.sum(probs * tm_per_bin, dim=-1)
+    predicted_tm_term = flow.sum(probs * tm_per_bin, dim=-1)
 
     normed_residue_mask = residue_weights / (eps + residue_weights.sum())
-    per_alignment = torch.sum(predicted_tm_term * normed_residue_mask, dim=-1)
+    per_alignment = flow.sum(predicted_tm_term * normed_residue_mask, dim=-1)
 
     weighted = per_alignment * residue_weights
      
-    argmax = (weighted == torch.max(weighted)).nonzero()[0]
+    argmax = (weighted == flow.max(weighted)).nonzero()[0]
     return per_alignment[tuple(argmax)]
 
 
@@ -680,31 +680,31 @@ def tm_loss(
         pts = affine.get_trans()[..., None, :, :]
         return affine.invert()[..., None].apply(pts)
 
-    sq_diff = torch.sum(
+    sq_diff = flow.sum(
         (_points(pred_affine) - _points(backbone_rigid)) ** 2, dim=-1
     )
 
     sq_diff = sq_diff.detach()
 
-    boundaries = torch.linspace(
+    boundaries = flow.linspace(
         0, max_bin, steps=(no_bins - 1), device=logits.device
     )
     boundaries = boundaries ** 2
-    true_bins = torch.sum(sq_diff[..., None] > boundaries, dim=-1)
+    true_bins = flow.sum(sq_diff[..., None] > boundaries, dim=-1)
 
     errors = softmax_cross_entropy(
-        logits, torch.nn.functional.one_hot(true_bins, no_bins)
+        logits, flow.nn.functional.one_hot(true_bins, no_bins)
     )
 
     square_mask = (
         backbone_rigid_mask[..., None] * backbone_rigid_mask[..., None, :]
     )
 
-    loss = torch.sum(errors * square_mask, dim=-1)
+    loss = flow.sum(errors * square_mask, dim=-1)
     scale = 0.5  # hack to help FP16 training along
-    denom = eps + torch.sum(scale * square_mask, dim=(-1, -2))
+    denom = eps + flow.sum(scale * square_mask, dim=(-1, -2))
     loss = loss / denom[..., None]
-    loss = torch.sum(loss, dim=-1)
+    loss = flow.sum(loss, dim=-1)
     loss = loss * scale
 
     loss = loss * (
@@ -712,20 +712,20 @@ def tm_loss(
     )
 
     # Average over the loss dimension
-    loss = torch.mean(loss)
+    loss = flow.mean(loss)
 
     return loss
 
 
 def between_residue_bond_loss(
-    pred_atom_positions: torch.Tensor,  # (*, N, 37/14, 3)
-    pred_atom_mask: torch.Tensor,  # (*, N, 37/14)
-    residue_index: torch.Tensor,  # (*, N)
-    aatype: torch.Tensor,  # (*, N)
+    pred_atom_positions: flow.Tensor,  # (*, N, 37/14, 3)
+    pred_atom_mask: flow.Tensor,  # (*, N, 37/14)
+    residue_index: flow.Tensor,  # (*, N)
+    aatype: flow.Tensor,  # (*, N)
     tolerance_factor_soft=12.0,
     tolerance_factor_hard=12.0,
     eps=1e-6,
-) -> Dict[str, torch.Tensor]:
+) -> Dict[str, flow.Tensor]:
     """Flat-bottom loss to penalize structural violations between residues.
 
     This is a loss penalizing any violation of the geometry around the peptide
@@ -766,8 +766,8 @@ def between_residue_bond_loss(
     has_no_gap_mask = (residue_index[..., 1:] - residue_index[..., :-1]) == 1.0
 
     # Compute loss for the C--N bond.
-    c_n_bond_length = torch.sqrt(
-        eps + torch.sum((this_c_pos - next_n_pos) ** 2, dim=-1)
+    c_n_bond_length = flow.sqrt(
+        eps + flow.sum((this_c_pos - next_n_pos) ** 2, dim=-1)
     )
 
     # The C-N bond to proline has slightly different length because of the ring.
@@ -786,59 +786,59 @@ def between_residue_bond_loss(
     ] + next_is_proline * residue_constants.between_res_bond_length_stddev_c_n[
         1
     ]
-    c_n_bond_length_error = torch.sqrt(eps + (c_n_bond_length - gt_length) ** 2)
-    c_n_loss_per_residue = torch.nn.functional.relu(
+    c_n_bond_length_error = flow.sqrt(eps + (c_n_bond_length - gt_length) ** 2)
+    c_n_loss_per_residue = flow.nn.functional.relu(
         c_n_bond_length_error - tolerance_factor_soft * gt_stddev
     )
     mask = this_c_mask * next_n_mask * has_no_gap_mask
-    c_n_loss = torch.sum(mask * c_n_loss_per_residue, dim=-1) / (
-        torch.sum(mask, dim=-1) + eps
+    c_n_loss = flow.sum(mask * c_n_loss_per_residue, dim=-1) / (
+        flow.sum(mask, dim=-1) + eps
     )
     c_n_violation_mask = mask * (
         c_n_bond_length_error > (tolerance_factor_hard * gt_stddev)
     )
 
     # Compute loss for the angles.
-    ca_c_bond_length = torch.sqrt(
-        eps + torch.sum((this_ca_pos - this_c_pos) ** 2, dim=-1)
+    ca_c_bond_length = flow.sqrt(
+        eps + flow.sum((this_ca_pos - this_c_pos) ** 2, dim=-1)
     )
-    n_ca_bond_length = torch.sqrt(
-        eps + torch.sum((next_n_pos - next_ca_pos) ** 2, dim=-1)
+    n_ca_bond_length = flow.sqrt(
+        eps + flow.sum((next_n_pos - next_ca_pos) ** 2, dim=-1)
     )
 
     c_ca_unit_vec = (this_ca_pos - this_c_pos) / ca_c_bond_length[..., None]
     c_n_unit_vec = (next_n_pos - this_c_pos) / c_n_bond_length[..., None]
     n_ca_unit_vec = (next_ca_pos - next_n_pos) / n_ca_bond_length[..., None]
 
-    ca_c_n_cos_angle = torch.sum(c_ca_unit_vec * c_n_unit_vec, dim=-1)
+    ca_c_n_cos_angle = flow.sum(c_ca_unit_vec * c_n_unit_vec, dim=-1)
     gt_angle = residue_constants.between_res_cos_angles_ca_c_n[0]
     gt_stddev = residue_constants.between_res_bond_length_stddev_c_n[0]
-    ca_c_n_cos_angle_error = torch.sqrt(
+    ca_c_n_cos_angle_error = flow.sqrt(
         eps + (ca_c_n_cos_angle - gt_angle) ** 2
     )
-    ca_c_n_loss_per_residue = torch.nn.functional.relu(
+    ca_c_n_loss_per_residue = flow.nn.functional.relu(
         ca_c_n_cos_angle_error - tolerance_factor_soft * gt_stddev
     )
     mask = this_ca_mask * this_c_mask * next_n_mask * has_no_gap_mask
-    ca_c_n_loss = torch.sum(mask * ca_c_n_loss_per_residue, dim=-1) / (
-        torch.sum(mask, dim=-1) + eps
+    ca_c_n_loss = flow.sum(mask * ca_c_n_loss_per_residue, dim=-1) / (
+        flow.sum(mask, dim=-1) + eps
     )
     ca_c_n_violation_mask = mask * (
         ca_c_n_cos_angle_error > (tolerance_factor_hard * gt_stddev)
     )
 
-    c_n_ca_cos_angle = torch.sum((-c_n_unit_vec) * n_ca_unit_vec, dim=-1)
+    c_n_ca_cos_angle = flow.sum((-c_n_unit_vec) * n_ca_unit_vec, dim=-1)
     gt_angle = residue_constants.between_res_cos_angles_c_n_ca[0]
     gt_stddev = residue_constants.between_res_cos_angles_c_n_ca[1]
-    c_n_ca_cos_angle_error = torch.sqrt(
-        eps + torch.square(c_n_ca_cos_angle - gt_angle)
+    c_n_ca_cos_angle_error = flow.sqrt(
+        eps + flow.square(c_n_ca_cos_angle - gt_angle)
     )
-    c_n_ca_loss_per_residue = torch.nn.functional.relu(
+    c_n_ca_loss_per_residue = flow.nn.functional.relu(
         c_n_ca_cos_angle_error - tolerance_factor_soft * gt_stddev
     )
     mask = this_c_mask * next_n_mask * next_ca_mask * has_no_gap_mask
-    c_n_ca_loss = torch.sum(mask * c_n_ca_loss_per_residue, dim=-1) / (
-        torch.sum(mask, dim=-1) + eps
+    c_n_ca_loss = flow.sum(mask * c_n_ca_loss_per_residue, dim=-1) / (
+        flow.sum(mask, dim=-1) + eps
     )
     c_n_ca_violation_mask = mask * (
         c_n_ca_cos_angle_error > (tolerance_factor_hard * gt_stddev)
@@ -850,21 +850,21 @@ def between_residue_bond_loss(
         c_n_loss_per_residue + ca_c_n_loss_per_residue + c_n_ca_loss_per_residue
     )
     per_residue_loss_sum = 0.5 * (
-        torch.nn.functional.pad(per_residue_loss_sum, (0, 1))
-        + torch.nn.functional.pad(per_residue_loss_sum, (1, 0))
+        flow.nn.functional.pad(per_residue_loss_sum, (0, 1))
+        + flow.nn.functional.pad(per_residue_loss_sum, (1, 0))
     )
 
     # Compute hard violations.
-    violation_mask = torch.max(
-        torch.stack(
+    violation_mask = flow.max(
+        flow.stack(
             [c_n_violation_mask, ca_c_n_violation_mask, c_n_ca_violation_mask],
             dim=-2,
         ),
         dim=-2,
     )[0]
-    violation_mask = torch.maximum(
-        torch.nn.functional.pad(violation_mask, (0, 1)),
-        torch.nn.functional.pad(violation_mask, (1, 0)),
+    violation_mask = flow.maximum(
+        flow.nn.functional.pad(violation_mask, (0, 1)),
+        flow.nn.functional.pad(violation_mask, (1, 0)),
     )
 
     return {
@@ -877,14 +877,14 @@ def between_residue_bond_loss(
 
 
 def between_residue_clash_loss(
-    atom14_pred_positions: torch.Tensor,
-    atom14_atom_exists: torch.Tensor,
-    atom14_atom_radius: torch.Tensor,
-    residue_index: torch.Tensor,
+    atom14_pred_positions: flow.Tensor,
+    atom14_atom_exists: flow.Tensor,
+    atom14_atom_radius: flow.Tensor,
+    residue_index: flow.Tensor,
     overlap_tolerance_soft=1.5,
     overlap_tolerance_hard=1.5,
     eps=1e-10,
-) -> Dict[str, torch.Tensor]:
+) -> Dict[str, flow.Tensor]:
     """Loss to penalize steric clashes between residues.
 
     This is a loss penalizing any steric clashes due to non bonded atoms in
@@ -913,9 +913,9 @@ def between_residue_clash_loss(
 
     # Create the distance matrix.
     # (N, N, 14, 14)
-    dists = torch.sqrt(
+    dists = flow.sqrt(
         eps
-        + torch.sum(
+        + flow.sum(
             (
                 atom14_pred_positions[..., :, None, :, None, :]
                 - atom14_pred_positions[..., None, :, None, :, :]
@@ -941,14 +941,14 @@ def between_residue_clash_loss(
     )
 
     # Backbone C--N bond between subsequent residues is no clash.
-    c_one_hot = torch.nn.functional.one_hot(
+    c_one_hot = flow.nn.functional.one_hot(
         residue_index.new_tensor(2), num_classes=14
     )
     c_one_hot = c_one_hot.reshape(
         *((1,) * len(residue_index.shape[:-1])), *c_one_hot.shape
     )
     c_one_hot = c_one_hot.type(fp_type)
-    n_one_hot = torch.nn.functional.one_hot(
+    n_one_hot = flow.nn.functional.one_hot(
         residue_index.new_tensor(0), num_classes=14
     )
     n_one_hot = n_one_hot.reshape(
@@ -973,7 +973,7 @@ def between_residue_clash_loss(
     cys_sg_idx = cys_sg_idx.reshape(
         *((1,) * len(residue_index.shape[:-1])), 1
     ).squeeze(-1)
-    cys_sg_one_hot = torch.nn.functional.one_hot(cys_sg_idx, num_classes=14)
+    cys_sg_one_hot = flow.nn.functional.one_hot(cys_sg_idx, num_classes=14)
     disulfide_bonds = (
         cys_sg_one_hot[..., None, None, :, None]
         * cys_sg_one_hot[..., None, None, None, :]
@@ -989,18 +989,18 @@ def between_residue_clash_loss(
 
     # Compute the error.
     # shape (N, N, 14, 14)
-    dists_to_low_error = dists_mask * torch.nn.functional.relu(
+    dists_to_low_error = dists_mask * flow.nn.functional.relu(
         dists_lower_bound - overlap_tolerance_soft - dists
     )
 
     # Compute the mean loss.
     # shape ()
-    mean_loss = torch.sum(dists_to_low_error) / (1e-6 + torch.sum(dists_mask))
+    mean_loss = flow.sum(dists_to_low_error) / (1e-6 + flow.sum(dists_mask))
 
     # Compute the per atom loss sum.
     # shape (N, 14)
-    per_atom_loss_sum = torch.sum(dists_to_low_error, dim=(-4, -2)) + torch.sum(
-        dists_to_low_error, axis=(-3, -1)
+    per_atom_loss_sum = flow.sum(dists_to_low_error, dim=(-4, -2)) + flow.sum(
+        dists_to_low_error, dim=(-3, -1)
     )
 
     # Compute the hard clash mask.
@@ -1011,9 +1011,9 @@ def between_residue_clash_loss(
 
     # Compute the per atom clash.
     # shape (N, 14)
-    per_atom_clash_mask = torch.maximum(
-        torch.amax(clash_mask, axis=(-4, -2)),
-        torch.amax(clash_mask, axis=(-3, -1)),
+    per_atom_clash_mask = flow.maximum(
+        flow.amax(clash_mask, dim=(-4, -2)),
+        flow.amax(clash_mask, dim=(-3, -1)),
     )
 
     return {
@@ -1024,13 +1024,13 @@ def between_residue_clash_loss(
 
 
 def within_residue_violations(
-    atom14_pred_positions: torch.Tensor,
-    atom14_atom_exists: torch.Tensor,
-    atom14_dists_lower_bound: torch.Tensor,
-    atom14_dists_upper_bound: torch.Tensor,
+    atom14_pred_positions: flow.Tensor,
+    atom14_atom_exists: flow.Tensor,
+    atom14_dists_lower_bound: flow.Tensor,
+    atom14_dists_upper_bound: flow.Tensor,
     tighten_bounds_for_loss=0.0,
     eps=1e-10,
-) -> Dict[str, torch.Tensor]:
+) -> Dict[str, flow.Tensor]:
     """Loss to penalize steric clashes within residues.
 
     This is a loss penalizing any steric violations or clashes of non-bonded atoms
@@ -1059,7 +1059,7 @@ def within_residue_violations(
               mask whether atom clashes with any other atom shape
     """
     # Compute the mask for each residue.
-    dists_masks = 1.0 - torch.eye(14, device=atom14_atom_exists.device)[None]
+    dists_masks = 1.0 - flow.eye(14, device=atom14_atom_exists.device)[None]
     dists_masks = dists_masks.reshape(
         *((1,) * len(atom14_atom_exists.shape[:-2])), *dists_masks.shape
     )
@@ -1070,9 +1070,9 @@ def within_residue_violations(
     )
 
     # Distance matrix
-    dists = torch.sqrt(
+    dists = flow.sqrt(
         eps
-        + torch.sum(
+        + flow.sum(
             (
                 atom14_pred_positions[..., :, :, None, :]
                 - atom14_pred_positions[..., :, None, :, :]
@@ -1083,16 +1083,16 @@ def within_residue_violations(
     )
 
     # Compute the loss.
-    dists_to_low_error = torch.nn.functional.relu(
+    dists_to_low_error = flow.nn.functional.relu(
         atom14_dists_lower_bound + tighten_bounds_for_loss - dists
     )
-    dists_to_high_error = torch.nn.functional.relu(
+    dists_to_high_error = flow.nn.functional.relu(
         dists - (atom14_dists_upper_bound - tighten_bounds_for_loss)
     )
     loss = dists_masks * (dists_to_low_error + dists_to_high_error)
 
     # Compute the per atom loss sum.
-    per_atom_loss_sum = torch.sum(loss, dim=-2) + torch.sum(loss, dim=-1)
+    per_atom_loss_sum = flow.sum(loss, dim=-2) + flow.sum(loss, dim=-1)
 
     # Compute the violations mask.
     violations = dists_masks * (
@@ -1100,8 +1100,8 @@ def within_residue_violations(
     )
 
     # Compute the per atom violations.
-    per_atom_violations = torch.maximum(
-        torch.max(violations, dim=-2)[0], torch.max(violations, axis=-1)[0]
+    per_atom_violations = flow.maximum(
+        flow.max(violations, dim=-2)[0], flow.max(violations, dim=-1)[0]
     )
 
     return {
@@ -1111,12 +1111,12 @@ def within_residue_violations(
 
 
 def find_structural_violations(
-    batch: Dict[str, torch.Tensor],
-    atom14_pred_positions: torch.Tensor,
+    batch: Dict[str, flow.Tensor],
+    atom14_pred_positions: flow.Tensor,
     violation_tolerance_factor: float,
     clash_overlap_tolerance: float,
     **kwargs,
-) -> Dict[str, torch.Tensor]:
+) -> Dict[str, flow.Tensor]:
     """Computes several checks for structural violations."""
 
     # Compute between residue backbone violations of bonds and angles.
@@ -1174,14 +1174,14 @@ def find_structural_violations(
     )
 
     # Combine them to a single per-residue violation mask (used later for LDDT).
-    per_residue_violations_mask = torch.max(
-        torch.stack(
+    per_residue_violations_mask = flow.max(
+        flow.stack(
             [
                 connection_violations["per_residue_violation_mask"],
-                torch.max(
+                flow.max(
                     between_residue_clashes["per_atom_clash_mask"], dim=-1
                 )[0],
-                torch.max(residue_violations["per_atom_violations"], dim=-1)[0],
+                flow.max(residue_violations["per_atom_violations"], dim=-1)[0],
             ],
             dim=-1,
         ),
@@ -1228,7 +1228,7 @@ def find_structural_violations_np(
     atom14_pred_positions: np.ndarray,
     config: ml_collections.ConfigDict,
 ) -> Dict[str, np.ndarray]:
-    to_tensor = lambda x: torch.tensor(x)
+    to_tensor = lambda x: flow.tensor(x)
     batch = tree_map(to_tensor, batch, np.ndarray)
     atom14_pred_positions = to_tensor(atom14_pred_positions)
 
@@ -1241,12 +1241,12 @@ def find_structural_violations_np(
 
 
 def extreme_ca_ca_distance_violations(
-    pred_atom_positions: torch.Tensor,  # (N, 37(14), 3)
-    pred_atom_mask: torch.Tensor,  # (N, 37(14))
-    residue_index: torch.Tensor,  # (N)
+    pred_atom_positions: flow.Tensor,  # (N, 37(14), 3)
+    pred_atom_mask: flow.Tensor,  # (N, 37(14))
+    residue_index: flow.Tensor,  # (N)
     max_angstrom_tolerance=1.5,
     eps=1e-6,
-) -> torch.Tensor:
+) -> flow.Tensor:
     """Counts residues whose Ca is a large distance from its neighbour.
 
     Measures the fraction of CA-CA pairs between consecutive amino acids that are
@@ -1266,8 +1266,8 @@ def extreme_ca_ca_distance_violations(
     next_ca_pos = pred_atom_positions[..., 1:, 1, :]
     next_ca_mask = pred_atom_mask[..., 1:, 1]
     has_no_gap_mask = (residue_index[..., 1:] - residue_index[..., :-1]) == 1.0
-    ca_ca_distance = torch.sqrt(
-        eps + torch.sum((this_ca_pos - next_ca_pos) ** 2, dim=-1)
+    ca_ca_distance = flow.sqrt(
+        eps + flow.sum((this_ca_pos - next_ca_pos) ** 2, dim=-1)
     )
     violations = (
         ca_ca_distance - residue_constants.ca_ca
@@ -1278,10 +1278,10 @@ def extreme_ca_ca_distance_violations(
 
 
 def compute_violation_metrics(
-    batch: Dict[str, torch.Tensor],
-    atom14_pred_positions: torch.Tensor,  # (N, 14, 3)
-    violations: Dict[str, torch.Tensor],
-) -> Dict[str, torch.Tensor]:
+    batch: Dict[str, flow.Tensor],
+    atom14_pred_positions: flow.Tensor,  # (N, 14, 3)
+    violations: Dict[str, flow.Tensor],
+) -> Dict[str, flow.Tensor]:
     """Compute several metrics to assess the structural violations."""
     ret = {}
     extreme_ca_ca_violations = extreme_ca_ca_distance_violations(
@@ -1299,7 +1299,7 @@ def compute_violation_metrics(
     )
     ret["violations_between_residue_clash"] = masked_mean(
         mask=batch["seq_mask"],
-        value=torch.max(
+        value=flow.max(
             violations["between_residues"]["clashes_per_atom_clash_mask"],
             dim=-1,
         )[0],
@@ -1307,7 +1307,7 @@ def compute_violation_metrics(
     )
     ret["violations_within_residue"] = masked_mean(
         mask=batch["seq_mask"],
-        value=torch.max(
+        value=flow.max(
             violations["within_residues"]["per_atom_violations"], dim=-1
         )[0],
         dim=-1,
@@ -1325,7 +1325,7 @@ def compute_violation_metrics_np(
     atom14_pred_positions: np.ndarray,
     violations: Dict[str, np.ndarray],
 ) -> Dict[str, np.ndarray]:
-    to_tensor = lambda x: torch.tensor(x)
+    to_tensor = lambda x: flow.tensor(x)
     batch = tree_map(to_tensor, batch, np.ndarray)
     atom14_pred_positions = to_tensor(atom14_pred_positions)
     violations = tree_map(to_tensor, violations, np.ndarray)
@@ -1333,17 +1333,17 @@ def compute_violation_metrics_np(
     out = compute_violation_metrics(batch, atom14_pred_positions, violations)
 
     to_np = lambda x: np.array(x)
-    return tree_map(to_np, out, torch.Tensor)
+    return tree_map(to_np, out, flow.Tensor)
 
 
 def violation_loss(
-    violations: Dict[str, torch.Tensor],
-    atom14_atom_exists: torch.Tensor,
+    violations: Dict[str, flow.Tensor],
+    atom14_atom_exists: flow.Tensor,
     eps=1e-6,
     **kwargs,
-) -> torch.Tensor:
-    num_atoms = torch.sum(atom14_atom_exists)
-    l_clash = torch.sum(
+) -> flow.Tensor:
+    num_atoms = flow.sum(atom14_atom_exists)
+    l_clash = flow.sum(
         violations["between_residues"]["clashes_per_atom_loss_sum"]
         + violations["within_residues"]["per_atom_loss_sum"]
     )
@@ -1359,10 +1359,10 @@ def violation_loss(
 
 
 def compute_renamed_ground_truth(
-    batch: Dict[str, torch.Tensor],
-    atom14_pred_positions: torch.Tensor,
+    batch: Dict[str, flow.Tensor],
+    atom14_pred_positions: flow.Tensor,
     eps=1e-10,
-) -> Dict[str, torch.Tensor]:
+) -> Dict[str, flow.Tensor]:
     """
     Find optimal renaming of ground truth based on the predicted positions.
 
@@ -1391,9 +1391,9 @@ def compute_renamed_ground_truth(
         renamed_atom14_gt_exists: Mask after renaming swap is performed.
     """
 
-    pred_dists = torch.sqrt(
+    pred_dists = flow.sqrt(
         eps
-        + torch.sum(
+        + flow.sum(
             (
                 atom14_pred_positions[..., None, :, None, :]
                 - atom14_pred_positions[..., None, :, None, :, :]
@@ -1404,9 +1404,9 @@ def compute_renamed_ground_truth(
     )
 
     atom14_gt_positions = batch["atom14_gt_positions"]
-    gt_dists = torch.sqrt(
+    gt_dists = flow.sqrt(
         eps
-        + torch.sum(
+        + flow.sum(
             (
                 atom14_gt_positions[..., None, :, None, :]
                 - atom14_gt_positions[..., None, :, None, :, :]
@@ -1417,9 +1417,9 @@ def compute_renamed_ground_truth(
     )
 
     atom14_alt_gt_positions = batch["atom14_alt_gt_positions"]
-    alt_gt_dists = torch.sqrt(
+    alt_gt_dists = flow.sqrt(
         eps
-        + torch.sum(
+        + flow.sum(
             (
                 atom14_alt_gt_positions[..., None, :, None, :]
                 - atom14_alt_gt_positions[..., None, :, None, :, :]
@@ -1429,8 +1429,8 @@ def compute_renamed_ground_truth(
         )
     )
 
-    lddt = torch.sqrt(eps + (pred_dists - gt_dists) ** 2)
-    alt_lddt = torch.sqrt(eps + (pred_dists - alt_gt_dists) ** 2)
+    lddt = flow.sqrt(eps + (pred_dists - gt_dists) ** 2)
+    alt_lddt = flow.sqrt(eps + (pred_dists - alt_gt_dists) ** 2)
 
     atom14_gt_exists = batch["atom14_gt_exists"]
     atom14_atom_is_ambiguous = batch["atom14_atom_is_ambiguous"]
@@ -1441,8 +1441,8 @@ def compute_renamed_ground_truth(
         * (1.0 - atom14_atom_is_ambiguous[..., None, :, None, :])
     )
 
-    per_res_lddt = torch.sum(mask * lddt, dim=(-1, -2, -3))
-    alt_per_res_lddt = torch.sum(mask * alt_lddt, dim=(-1, -2, -3))
+    per_res_lddt = flow.sum(mask * lddt, dim=(-1, -2, -3))
+    alt_per_res_lddt = flow.sum(mask * alt_lddt, dim=(-1, -2, -3))
 
     fp_type = atom14_pred_positions.dtype
     alt_naming_is_better = (alt_per_res_lddt < per_res_lddt).type(fp_type)
@@ -1467,25 +1467,25 @@ def compute_renamed_ground_truth(
 
 
 def experimentally_resolved_loss(
-    logits: torch.Tensor,
-    atom37_atom_exists: torch.Tensor,
-    all_atom_mask: torch.Tensor,
-    resolution: torch.Tensor,
+    logits: flow.Tensor,
+    atom37_atom_exists: flow.Tensor,
+    all_atom_mask: flow.Tensor,
+    resolution: flow.Tensor,
     min_resolution: float,
     max_resolution: float,
     eps: float = 1e-8,
     **kwargs,
-) -> torch.Tensor:
+) -> flow.Tensor:
     errors = sigmoid_cross_entropy(logits, all_atom_mask)
-    loss = torch.sum(errors * atom37_atom_exists, dim=-1)
-    loss = loss / (eps + torch.sum(atom37_atom_exists, dim=(-1, -2)))
-    loss = torch.sum(loss, dim=-1)
+    loss = flow.sum(errors * atom37_atom_exists, dim=-1)
+    loss = loss / (eps + flow.sum(atom37_atom_exists, dim=(-1, -2)))
+    loss = flow.sum(loss, dim=-1)
     
     loss = loss * (
         (resolution >= min_resolution) & (resolution <= max_resolution)
     )
 
-    loss = torch.mean(loss)
+    loss = flow.mean(loss)
  
     return loss
 
@@ -1502,23 +1502,23 @@ def masked_msa_loss(logits, true_msa, bert_mask, eps=1e-8, **kwargs):
         Masked MSA loss
     """
     errors = softmax_cross_entropy(
-        logits, torch.nn.functional.one_hot(true_msa, num_classes=23)
+        logits, flow.nn.functional.one_hot(true_msa, num_classes=23)
     )
 
     # FP16-friendly averaging. Equivalent to:
     # loss = (
-    #     torch.sum(errors * bert_mask, dim=(-1, -2)) /
-    #     (eps + torch.sum(bert_mask, dim=(-1, -2)))
+    #     flow.sum(errors * bert_mask, dim=(-1, -2)) /
+    #     (eps + flow.sum(bert_mask, dim=(-1, -2)))
     # )
     loss = errors * bert_mask
-    loss = torch.sum(loss, dim=-1)
+    loss = flow.sum(loss, dim=-1)
     scale = 0.5
-    denom = eps + torch.sum(scale * bert_mask, dim=(-1, -2))
+    denom = eps + flow.sum(scale * bert_mask, dim=(-1, -2))
     loss = loss / denom[..., None]
-    loss = torch.sum(loss, dim=-1)
+    loss = flow.sum(loss, dim=-1)
     loss = loss * scale
 
-    loss = torch.mean(loss)
+    loss = flow.mean(loss)
 
     return loss
 
@@ -1590,9 +1590,9 @@ class AlphaFoldLoss(nn.Module):
         for loss_name, loss_fn in loss_fns.items():
             weight = self.config[loss_name].weight
             loss = loss_fn()
-            if(torch.isnan(loss) or torch.isinf(loss)):
+            if(flow.isnan(loss) or flow.isinf(loss)):
                 #for k,v in batch.items():
-                #    if(torch.any(torch.isnan(v)) or torch.any(torch.isinf(v))):
+                #    if(flow.any(flow.isnan(v)) or flow.any(flow.isinf(v))):
                 #        logging.warning(f"{k}: is nan")
                 #logging.warning(f"{loss_name}: {loss}")
                 logging.warning(f"{loss_name} loss is NaN. Skipping...")
@@ -1604,9 +1604,9 @@ class AlphaFoldLoss(nn.Module):
 
         # Scale the loss by the square root of the minimum of the crop size and
         # the (average) sequence length. See subsection 1.9.
-        seq_len = torch.mean(batch["seq_length"].float())
+        seq_len = flow.mean(batch["seq_length"].float())
         crop_len = batch["aatype"].shape[-1]
-        cum_loss = cum_loss * torch.sqrt(min(seq_len, crop_len))
+        cum_loss = cum_loss * flow.sqrt(min(seq_len, crop_len))
 
         losses["loss"] = cum_loss.detach().clone()
 

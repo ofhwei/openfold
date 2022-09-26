@@ -17,8 +17,8 @@ import math
 import sys
 from typing import Optional, List
 
-import torch
-import torch.nn as nn
+import oneflow as flow
+import oneflow.nn as nn
 
 from openfold.model.primitives import Linear, LayerNorm, Attention
 from openfold.model.dropout import (
@@ -83,12 +83,12 @@ class TemplatePointwiseAttention(nn.Module):
         )
 
     def _chunk(self,
-        z: torch.Tensor,
-        t: torch.Tensor,
-        biases: List[torch.Tensor],
+        z: flow.Tensor,
+        t: flow.Tensor,
+        biases: List[flow.Tensor],
         chunk_size: int,
         use_lma: bool = False,
-    ) -> torch.Tensor:
+    ) -> flow.Tensor:
         mha_inputs = {
             "q_x": z,
             "kv_x": t,
@@ -103,13 +103,13 @@ class TemplatePointwiseAttention(nn.Module):
 
 
     def forward(self, 
-        t: torch.Tensor, 
-        z: torch.Tensor, 
-        template_mask: Optional[torch.Tensor] = None,
+        t: flow.Tensor, 
+        z: flow.Tensor, 
+        template_mask: Optional[flow.Tensor] = None,
         # This module suffers greatly from a small chunk size
         chunk_size: Optional[int] = 256,
         use_lma: bool = False,
-    ) -> torch.Tensor:
+    ) -> flow.Tensor:
         """
         Args:
             t:
@@ -198,8 +198,8 @@ class TemplatePairStackBlock(nn.Module):
         )
 
     def forward(self, 
-        z: torch.Tensor, 
-        mask: torch.Tensor, 
+        z: flow.Tensor, 
+        mask: flow.Tensor, 
         chunk_size: Optional[int] = None, 
         use_lma: bool = False,
         inplace_safe: bool = False,
@@ -210,10 +210,10 @@ class TemplatePairStackBlock(nn.Module):
             _attn_chunk_size = chunk_size
 
         single_templates = [
-            t.unsqueeze(-4) for t in torch.unbind(z, dim=-4)
+            t.unsqueeze(-4) for t in flow.unbind(z, dim=-4)
         ]
         single_templates_masks = [
-            m.unsqueeze(-3) for m in torch.unbind(mask, dim=-3)
+            m.unsqueeze(-3) for m in flow.unbind(mask, dim=-3)
         ]
 
         for i in range(len(single_templates)):
@@ -256,7 +256,7 @@ class TemplatePairStackBlock(nn.Module):
                 single = single + self.dropout_row(tmu_update)
             else:
                 single = tmu_update
-            
+
             del tmu_update
 
             tmu_update = self.tri_mul_in(
@@ -285,7 +285,7 @@ class TemplatePairStackBlock(nn.Module):
                 single_templates[i] = single
 
         if(not inplace_safe):
-            z = torch.cat(single_templates, dim=-4)
+            z = flow.cat(single_templates, dim=-4)
 
         return z
 
@@ -352,8 +352,8 @@ class TemplatePairStack(nn.Module):
 
     def forward(
         self,
-        t: torch.tensor,
-        mask: torch.tensor,
+        t: flow.tensor,
+        mask: flow.tensor,
         chunk_size: int,
         use_lma: bool = False,
         inplace_safe: bool = False,
@@ -449,7 +449,7 @@ def embed_templates_offload(
     for i in range(n_templ):
         idx = batch["template_aatype"].new_tensor(i)
         single_template_feats = tensor_tree_map(
-            lambda t: torch.index_select(t, templ_dim, idx).squeeze(templ_dim),
+            lambda t: flow.index_select(t, templ_dim, idx).squeeze(templ_dim),
             batch,
         )
 
@@ -485,7 +485,7 @@ def embed_templates_offload(
         pair_chunks = [
             p[..., i: i + template_chunk_size, :, :] for p in pair_embeds_cpu
         ]
-        pair_chunk = torch.cat(pair_chunks, dim=templ_dim).to(device=z.device)
+        pair_chunk = flow.cat(pair_chunks, dim=templ_dim).to(device=z.device)
         z_chunk = z[..., i: i + template_chunk_size, :, :]
         att_chunk = model.template_pointwise_att(
             pair_chunk,
@@ -499,9 +499,9 @@ def embed_templates_offload(
     del pair_chunks
 
     if(inplace_safe):
-        t = t * (torch.sum(batch["template_mask"], dim=-1) > 0)
+        t = t * (flow.sum(batch["template_mask"], dim=-1) > 0)
     else:
-        t *= (torch.sum(batch["template_mask"], dim=-1) > 0)
+        t *= (flow.sum(batch["template_mask"], dim=-1) > 0)
 
     ret = {}
     if model.config.template.embed_angles:
@@ -610,9 +610,9 @@ def embed_templates_average(
         del t
 
     if(inplace_safe):
-        out_tensor *= (torch.sum(batch["template_mask"], dim=-1) > 0)
+        out_tensor *= (flow.sum(batch["template_mask"], dim=-1) > 0)
     else:
-        out_tensor = out_tensor * (torch.sum(batch["template_mask"], dim=-1) > 0)
+        out_tensor = out_tensor * (flow.sum(batch["template_mask"], dim=-1) > 0)
 
     ret = {}
     if model.config.template.embed_angles:

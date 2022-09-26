@@ -14,8 +14,8 @@
 # limitations under the License.
 from functools import partial
 import math
-import torch
-import torch.nn as nn
+import oneflow as flow
+import oneflow.nn as nn
 from typing import Optional, List, Tuple
 
 from openfold.model.primitives import (
@@ -86,16 +86,16 @@ class MSAAttention(nn.Module):
             self.no_heads,
         )
 
-    @torch.jit.ignore
+    # @torch.jit.ignore
     def _chunk(self, 
-        m: torch.Tensor,
-        biases: Optional[List[torch.Tensor]],
+        m: flow.Tensor,
+        biases: Optional[List[flow.Tensor]],
         chunk_size: int,
         use_memory_efficient_kernel: bool, 
         use_lma: bool,
         use_flash: bool,
-        flash_mask: Optional[torch.Tensor],
-    ) -> torch.Tensor:
+        flash_mask: Optional[flow.Tensor],
+    ) -> flow.Tensor:
         def fn(m, biases, flash_mask):
             m = self.layer_norm_m(m)
             return self.mha(
@@ -126,11 +126,11 @@ class MSAAttention(nn.Module):
         )
 
     def _prep_inputs(self,
-        m: torch.Tensor,
-        z: Optional[torch.Tensor],
-        mask: Optional[torch.Tensor],
+        m: flow.Tensor,
+        z: Optional[flow.Tensor],
+        mask: Optional[flow.Tensor],
         inplace_safe: bool = False,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]: 
+    ) -> Tuple[flow.Tensor, flow.Tensor, flow.Tensor]: 
         n_seq, n_res = m.shape[-3:-1]
         if mask is None:
             # [*, N_seq, N_res]
@@ -144,7 +144,7 @@ class MSAAttention(nn.Module):
         if (self.pair_bias and 
             z is not None and                       # For the 
             self.layer_norm_z is not None and       # benefit of
-            self.linear_z is not None               # TorchScript
+            self.linear_z is not None               # flowScript
         ):
             chunks = []
 
@@ -159,22 +159,22 @@ class MSAAttention(nn.Module):
 
                 chunks.append(z_chunk)
             
-            z = torch.cat(chunks, dim=-3)
+            z = flow.cat(chunks, dim=-3)
             
             # [*, 1, no_heads, N_res, N_res]
             z = permute_final_dims(z, (2, 0, 1)).unsqueeze(-4)
 
         return m, mask_bias, z
 
-    @torch.jit.ignore
+    # @torch.jit.ignore
     def _chunked_msa_attn(self,
-        m: torch.Tensor,
-        z: Optional[torch.Tensor],
-        mask: Optional[torch.Tensor],
+        m: flow.Tensor,
+        z: Optional[flow.Tensor],
+        mask: Optional[flow.Tensor],
         chunk_logits: int,
         checkpoint: bool,
         inplace_safe: bool = False
-    ) -> torch.Tensor:
+    ) -> flow.Tensor:
         """ 
         MSA attention with training-time chunking of the softmax computation.
         Saves memory in the extra MSA stack. Probably obviated by our fused 
@@ -192,7 +192,7 @@ class MSAAttention(nn.Module):
 
         checkpoint_fn = get_checkpoint_fn()
 
-        if(torch.is_grad_enabled() and checkpoint):
+        if(flow.is_grad_enabled() and checkpoint):
             m, q, k, v, mask_bias, z = checkpoint_fn(_get_qkv, m, z)
         else:
             m, q, k, v, mask_bias, z = _get_qkv(m, z)
@@ -207,7 +207,7 @@ class MSAAttention(nn.Module):
             checkpoint=checkpoint,
         )
 
-        if(torch.is_grad_enabled() and checkpoint):
+        if(flow.is_grad_enabled() and checkpoint):
             # Storing an additional m here is far from ideal
             m = checkpoint_fn(self.mha._wrap_up, o, m)
         else:
@@ -216,9 +216,9 @@ class MSAAttention(nn.Module):
         return m
 
     def forward(self, 
-        m: torch.Tensor, 
-        z: Optional[torch.Tensor] = None, 
-        mask: Optional[torch.Tensor] = None, 
+        m: flow.Tensor, 
+        z: Optional[flow.Tensor] = None, 
+        mask: Optional[flow.Tensor] = None, 
         chunk_size: Optional[int] = None,
         use_memory_efficient_kernel: bool = False,
         use_lma: bool = False,
@@ -226,7 +226,7 @@ class MSAAttention(nn.Module):
         inplace_safe: bool = False,
         _chunk_logits: Optional[int] = None,
         _checkpoint_chunks: Optional[bool] = None,
-    ) -> torch.Tensor:
+    ) -> flow.Tensor:
         """
         Args:
             m:
@@ -321,7 +321,7 @@ class MSAColumnAttention(nn.Module):
     Implements Algorithm 8.
 
     By rights, this should also be a subclass of MSAAttention. Alas,
-    most inheritance isn't supported by TorchScript.
+    most inheritance isn't supported by flowScript.
     """
 
     def __init__(self, c_m, c_hidden, no_heads, inf=1e9):
@@ -353,12 +353,12 @@ class MSAColumnAttention(nn.Module):
         )
 
     def forward(self, 
-        m: torch.Tensor, 
-        mask: Optional[torch.Tensor] = None, 
+        m: flow.Tensor, 
+        mask: Optional[flow.Tensor] = None, 
         chunk_size: Optional[int] = None,
         use_lma: bool = False,
         use_flash: bool = False,
-    ) -> torch.Tensor:
+    ) -> flow.Tensor:
         """
         Args:
             m:
@@ -413,13 +413,13 @@ class MSAColumnGlobalAttention(nn.Module):
             eps=eps,
         )
 
-    @torch.jit.ignore
+    # @flow.jit.ignore
     def _chunk(self,
-        m: torch.Tensor,
-        mask: torch.Tensor,
+        m: flow.Tensor,
+        mask: flow.Tensor,
         chunk_size: int,
         use_lma: bool = False,
-    ) -> torch.Tensor:
+    ) -> flow.Tensor:
         mha_input = {
             "m": m,
             "mask": mask,
@@ -438,16 +438,16 @@ class MSAColumnGlobalAttention(nn.Module):
 
     def forward(
         self, 
-        m: torch.Tensor, 
-        mask: Optional[torch.Tensor] = None, 
+        m: flow.Tensor, 
+        mask: Optional[flow.Tensor] = None, 
         chunk_size: Optional[int] = None,
         use_lma: bool = False,
-    ) -> torch.Tensor:
+    ) -> flow.Tensor:
         n_seq, n_res, c_in = m.shape[-3:]
 
         if mask is None:
             # [*, N_seq, N_res]
-            mask = torch.ones(
+            mask = flow.ones(
                 m.shape[:-1],
                 dtype=m.dtype,
                 device=m.device,

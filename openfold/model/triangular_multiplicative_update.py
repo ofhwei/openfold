@@ -16,8 +16,8 @@
 from functools import partialmethod
 from typing import Optional
 
-import torch
-import torch.nn as nn
+import oneflow as flow
+import oneflow.nn as nn
 
 from openfold.model.primitives import Linear, LayerNorm
 from openfold.utils.chunk_utils import chunk_layer
@@ -54,10 +54,10 @@ class TriangleMultiplicativeUpdate(nn.Module):
         self.sigmoid = nn.Sigmoid()
 
     def _combine_projections(self,
-        a: torch.Tensor,
-        b: torch.Tensor,
+        a: flow.Tensor,
+        b: flow.Tensor,
         _inplace_chunk_size: Optional[int] = None
-    ) -> torch.Tensor:
+    ) -> flow.Tensor:
         if(self._outgoing):
             a = permute_final_dims(a, (2, 0, 1))
             b = permute_final_dims(b, (2, 1, 0))
@@ -66,12 +66,12 @@ class TriangleMultiplicativeUpdate(nn.Module):
             b = permute_final_dims(b,  (2, 0, 1))
 
         if(_inplace_chunk_size is not None):
-            # To be replaced by torch vmap
+            # To be replaced by flow vmap
             for i in range(0, a.shape[-3], _inplace_chunk_size):
                 a_chunk = a[..., i: i + _inplace_chunk_size, :, :]
                 b_chunk = b[..., i: i + _inplace_chunk_size, :, :]
                 a[..., i: i + _inplace_chunk_size, :, :] = (
-                    torch.matmul(
+                    flow.matmul(
                         a_chunk,
                         b_chunk,
                     )
@@ -79,13 +79,13 @@ class TriangleMultiplicativeUpdate(nn.Module):
 
             p = a
         else:
-            p = torch.matmul(a, b)
+            p = flow.matmul(a, b)
 
         return permute_final_dims(p, (1, 2, 0))
 
     def _inference_forward(self,
-        z: torch.Tensor,
-        mask: Optional[torch.Tensor] = None,
+        z: flow.Tensor,
+        mask: Optional[flow.Tensor] = None,
         inplace_chunk_size: Optional[int] = None,
         with_add: bool = True,
     ):
@@ -163,7 +163,7 @@ class TriangleMultiplicativeUpdate(nn.Module):
             
             pair = self.layer_norm_in(pair)
             p = linear_g(pair)
-            p.sigmoid_()
+            p = p.sigmoid()
             p *= linear_p(pair)
             p *= mask
             p = permute_final_dims(p, (2, 0, 1))
@@ -204,7 +204,6 @@ class TriangleMultiplicativeUpdate(nn.Module):
         # brings total memory consumption to 2x z (disregarding size of chunks)
         # [*, N, N, c]
         a = compute_projection(z, mask, True, chunked=True)
-
         if(inplace_chunk_size is not None):
             n = a.shape[-1]
             half_n = n // 2 + n % 2
@@ -313,7 +312,7 @@ class TriangleMultiplicativeUpdate(nn.Module):
                 )
                 del z_chunk_b
 
-                x_chunk = torch.matmul(
+                x_chunk = flow.matmul(
                      a,
                      b_chunk,
                 )
@@ -327,7 +326,7 @@ class TriangleMultiplicativeUpdate(nn.Module):
                     z, i, i + offset, col_dim
                 )
                 g_chunk = self.linear_g(self.layer_norm_in(z_chunk_g)) 
-                g_chunk.sigmoid_()
+                g_chunk = g_chunk.sigmoid()
                 del z_chunk_g
                 
                 x_chunk *= g_chunk
@@ -341,11 +340,11 @@ class TriangleMultiplicativeUpdate(nn.Module):
                     z[z_slicer] = x_chunk
         else:
             b = compute_projection(z, mask, False, False)
-            x = torch.matmul(a, b)
+            x = flow.matmul(a, b)
             x = self.layer_norm_out(x)
             x = self.linear_z(x)
             g = self.linear_g(z)
-            g.sigmoid_()
+            g = g.sigmoid()
             x *= g
             if(with_add):
                 z += x
@@ -355,12 +354,12 @@ class TriangleMultiplicativeUpdate(nn.Module):
         return z
 
     def forward(self, 
-        z: torch.Tensor, 
-        mask: Optional[torch.Tensor] = None,
+        z: flow.Tensor, 
+        mask: Optional[flow.Tensor] = None,
         inplace_safe: bool = False,
         _add_with_inplace: bool = False,
         _inplace_chunk_size: Optional[int] = 256,
-    ) -> torch.Tensor:
+    ) -> flow.Tensor:
         """
         Args:
             x:
