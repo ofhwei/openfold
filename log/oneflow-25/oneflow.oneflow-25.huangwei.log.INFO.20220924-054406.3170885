@@ -1,7 +1,0 @@
-Log file created at: 2022/09/24 05:44:06
-Running on machine: oneflow-25
-Running duration (h:mm:ss): 0:00:00
-Log line format: [IWEF]yyyymmdd hh:mm:ss.uuuuuu threadid file:line] msg
-I20220924 05:44:06.938189 3170885 env_global_objects_scope.cpp:147] Using rpc backend: local
-I20220924 05:44:07.115420 3170885 epoll_comm_network.cpp:63] CommNet:Epoll listening on 0.0.0.0:33269
-F20220924 05:44:16.184010 3171107 broadcast_matmul.h:47] Check failed: *m > 0 (0 vs. 0) 

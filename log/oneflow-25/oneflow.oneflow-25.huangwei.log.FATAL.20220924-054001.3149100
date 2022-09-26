@@ -1,5 +1,0 @@
-Log file created at: 2022/09/24 05:40:01
-Running on machine: oneflow-25
-Running duration (h:mm:ss): 0:00:00
-Log line format: [IWEF]yyyymmdd hh:mm:ss.uuuuuu threadid file:line] msg
-F20220924 05:40:01.414129 3149327 broadcast_matmul.h:47] Check failed: *m > 0 (0 vs. 0) 

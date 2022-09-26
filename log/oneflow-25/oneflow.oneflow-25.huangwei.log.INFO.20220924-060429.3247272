@@ -1,7 +1,0 @@
-Log file created at: 2022/09/24 06:04:29
-Running on machine: oneflow-25
-Running duration (h:mm:ss): 0:00:00
-Log line format: [IWEF]yyyymmdd hh:mm:ss.uuuuuu threadid file:line] msg
-I20220924 06:04:29.474431 3247272 env_global_objects_scope.cpp:147] Using rpc backend: local
-I20220924 06:04:29.658986 3247272 epoll_comm_network.cpp:63] CommNet:Epoll listening on 0.0.0.0:45551
-F20220924 06:04:51.305716 3247272 shape.cpp:30] Check failed: index < tp()->NumAxes() (0 vs. 0)  Shape: () visit index: 0 > num_axes: 0
