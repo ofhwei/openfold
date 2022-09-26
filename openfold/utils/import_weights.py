@@ -17,7 +17,7 @@ from enum import Enum
 from dataclasses import dataclass
 from functools import partial
 import numpy as np
-import torch
+import oneflow as flow
 from typing import Union, List
 
 
@@ -47,7 +47,7 @@ class ParamType(Enum):
 
 @dataclass
 class Param:
-    param: Union[torch.Tensor, List[torch.Tensor]]
+    param: Union[flow.Tensor, List[flow.Tensor]]
     param_type: ParamType = ParamType.Other
     stacked: bool = False
 
@@ -102,11 +102,11 @@ def stacked(param_dict_list, out=None):
 
 def assign(translation_dict, orig_weights):
     for k, param in translation_dict.items():
-        with torch.no_grad():
-            weights = torch.as_tensor(orig_weights[k])
+        with flow.no_grad():
+            weights = flow.as_tensor(orig_weights[k])
             ref, param_type = param.param, param.param_type
             if param.stacked:
-                weights = torch.unbind(weights, 0)
+                weights = flow.unbind(weights, 0)
             else:
                 weights = [weights]
                 ref = [ref]

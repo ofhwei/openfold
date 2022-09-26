@@ -16,7 +16,7 @@ import logging
 import math
 from typing import Tuple, List, Callable, Any, Dict, Sequence, Optional
 
-import torch
+import oneflow as flow
 
 from openfold.utils.tensor_utils import (
     tree_map,
@@ -33,7 +33,7 @@ def _fetch_dims(tree):
     elif tree_type is list or tree_type is tuple:
         for t in tree:
             shapes.extend(_fetch_dims(t))
-    elif tree_type is torch.Tensor:
+    elif tree_type is flow.Tensor:
         shapes.append(tree.shape)
     else:
         raise ValueError("Not supported")
@@ -41,7 +41,7 @@ def _fetch_dims(tree):
     return shapes
 
 
-@torch.jit.ignore
+# @torch.jit.ignore
 def _flat_idx_to_idx(
     flat_idx: int,
     dims: Tuple[int],
@@ -54,7 +54,7 @@ def _flat_idx_to_idx(
     return tuple(reversed(idx))
 
 
-@torch.jit.ignore
+# @torch.jit.ignore
 def _get_minimal_slice_set(
     start: Sequence[int],
     end: Sequence[int],
@@ -172,13 +172,13 @@ def _get_minimal_slice_set(
     return [tuple(s) for s in slices]
 
 
-@torch.jit.ignore
+# @torch.jit.ignore
 def _chunk_slice(
-    t: torch.Tensor,
+    t: flow.Tensor,
     flat_start: int,
     flat_end: int,
     no_batch_dims: int,
-) -> torch.Tensor:
+) -> flow.Tensor:
     """
         Equivalent to
         
@@ -204,7 +204,7 @@ def _chunk_slice(
 
     sliced_tensors = [t[s] for s in slices]
 
-    return torch.cat(
+    return flow.cat(
         [s.view((-1,) + t.shape[no_batch_dims:]) for s in sliced_tensors]
     )
 
@@ -223,7 +223,7 @@ def chunk_layer(
 
     Layer outputs and inputs are assumed to be simple "pytrees,"
     consisting only of (arbitrarily nested) lists, tuples, and dicts with
-    torch.Tensor leaves.
+    flow.Tensor leaves.
 
     Args:
         layer:
@@ -323,7 +323,7 @@ def chunk_layer(
                     x1[i: i + chunk_size] += x2
                 else:
                     x1[i : i + chunk_size] = x2
-        elif out_type is torch.Tensor:
+        elif out_type is flow.Tensor:
             if(_add_into_out):
                 out[i: i + chunk_size] += output_chunk
             else:
@@ -362,7 +362,7 @@ class ChunkSizeTuner:
     
         def test_chunk_size(chunk_size):
             try:
-                with torch.no_grad():
+                with flow.no_grad():
                     fn(*args, chunk_size=chunk_size)
                 return True
             except RuntimeError:
@@ -405,7 +405,7 @@ class ChunkSizeTuner:
         min_chunk_size: int,
     ) -> int: 
         consistent = True
-        remove_tensors = lambda a: a.shape if type(a) is torch.Tensor else a
+        remove_tensors = lambda a: a.shape if type(a) is flow.Tensor else a
         arg_data = tree_map(remove_tensors, args, object) 
         if(self.cached_arg_data is not None):
             # If args have changed shape/value, we need to re-tune

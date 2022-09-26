@@ -5,7 +5,7 @@ import re
 import time
 
 import numpy
-import torch
+import oneflow as flow
 
 from openfold.model.model import AlphaFold
 from openfold.np import residue_constants, protein
@@ -14,9 +14,9 @@ from openfold.utils.import_weights import (
     import_jax_weights_,
 )
 
-from pytorch_lightning.utilities.deepspeed import (
-    convert_zero_checkpoint_to_fp32_state_dict
-)
+# from pytorch_lightning.utilities.deepspeed import (
+#     convert_zero_checkpoint_to_fp32_state_dict
+# )
 
 logging.basicConfig()
 logger = logging.getLogger(__file__)
@@ -85,15 +85,18 @@ def load_models_from_command_line(config, model_device, openfold_checkpoint_path
                 )
 
                 if not os.path.isfile(ckpt_path):
+                    from pytorch_lightning.utilities.deepspeed import (
+                            convert_zero_checkpoint_to_fp32_state_dict
+                    )
                     convert_zero_checkpoint_to_fp32_state_dict(
                         path,
                         ckpt_path,
                     )
-                d = torch.load(ckpt_path)
+                d = flow.load(ckpt_path)
                 model.load_state_dict(d["ema"]["params"])
             else:
                 ckpt_path = path
-                d = torch.load(ckpt_path)
+                d = flow.load(ckpt_path)
 
                 if "ema" in d:
                     # The public weights have had this done to them already
@@ -147,7 +150,7 @@ def update_timings(timing_dict, output_file=os.path.join(os.getcwd(), "timings.j
 
 
 def run_model(model, batch, tag, output_dir):
-    with torch.no_grad():
+    with flow.no_grad():
         # Temporarily disable templates if there aren't any in the batch
         template_enabled = model.config.template.enabled
         model.config.template.enabled = template_enabled and any([

@@ -14,8 +14,8 @@
 # limitations under the License.
 import math
 import sys
-import torch
-import torch.nn as nn
+import oneflow as flow
+import oneflow.nn as nn
 from typing import Tuple, Sequence, Optional
 from functools import partial
 
@@ -74,12 +74,12 @@ class MSATransition(nn.Module):
         m = self.linear_2(m) * mask
         return m
 
-    @torch.jit.ignore
+    # @flow.jit.ignore
     def _chunk(self,
-        m: torch.Tensor,
-        mask: torch.Tensor,
+        m: flow.Tensor,
+        mask: flow.Tensor,
         chunk_size: int,
-    ) -> torch.Tensor:
+    ) -> flow.Tensor:
          return chunk_layer(
              self._transition,
              {"m": m, "mask": mask},
@@ -90,10 +90,10 @@ class MSATransition(nn.Module):
 
     def forward(
         self,
-        m: torch.Tensor,
-        mask: Optional[torch.Tensor] = None,
+        m: flow.Tensor,
+        mask: Optional[flow.Tensor] = None,
         chunk_size: Optional[int] = None,
-    ) -> torch.Tensor:
+    ) -> flow.Tensor:
         """
         Args:
             m:
@@ -177,16 +177,16 @@ class EvoformerBlockCore(nn.Module):
         self.ps_dropout_row_layer = DropoutRowwise(pair_dropout)
 
     def forward(self,
-        input_tensors: Sequence[torch.Tensor],
-        msa_mask: torch.Tensor,
-        pair_mask: torch.Tensor,
+        input_tensors: Sequence[flow.Tensor],
+        msa_mask: flow.Tensor,
+        pair_mask: flow.Tensor,
         chunk_size: Optional[int] = None,
         use_lma: bool = False,
         inplace_safe: bool = False,
         _mask_trans: bool = True,
         _attn_chunk_size: Optional[int] = None,
         _offload_inference: bool = False,
-    ) -> Tuple[torch.Tensor, torch.Tensor]: 
+    ) -> Tuple[flow.Tensor, flow.Tensor]: 
         # DeepMind doesn't mask these transitions in the source, so _mask_trans
         # should be disabled to better approximate the exact activations of
         # the original.
@@ -210,7 +210,7 @@ class EvoformerBlockCore(nn.Module):
             del m, z
             assert(sys.getrefcount(input_tensors[1]) == 2)
             input_tensors[1] = input_tensors[1].cpu()
-            torch.cuda.empty_cache()
+            flow.cuda.empty_cache()
             m, z = input_tensors 
 
         opm = self.outer_product_mean(
@@ -233,6 +233,7 @@ class EvoformerBlockCore(nn.Module):
             inplace_safe=inplace_safe,
             _add_with_inplace=True,
         )
+
         if(not inplace_safe):
             z = z + self.ps_dropout_row_layer(tmu_update)
         else:
@@ -361,10 +362,10 @@ class EvoformerBlock(nn.Module):
         )
 
     def forward(self,
-        m: Optional[torch.Tensor],
-        z: Optional[torch.Tensor],
-        msa_mask: torch.Tensor,
-        pair_mask: torch.Tensor,
+        m: Optional[flow.Tensor],
+        z: Optional[flow.Tensor],
+        msa_mask: flow.Tensor,
+        pair_mask: flow.Tensor,
         chunk_size: Optional[int] = None,
         use_lma: bool = False,
         use_flash: bool = False,
@@ -372,8 +373,8 @@ class EvoformerBlock(nn.Module):
         _mask_trans: bool = True,
         _attn_chunk_size: Optional[int] = None,
         _offload_inference: bool = False,
-        _offloadable_inputs: Optional[Sequence[torch.Tensor]] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        _offloadable_inputs: Optional[Sequence[flow.Tensor]] = None,
+    ) -> Tuple[flow.Tensor, flow.Tensor]:
         if(_attn_chunk_size is None):
             _attn_chunk_size = chunk_size
 
@@ -435,7 +436,7 @@ class ExtraMSABlock(nn.Module):
         Almost identical to the standard EvoformerBlock, except in that the
         ExtraMSABlock uses GlobalAttention for MSA column attention and
         requires more fine-grained control over checkpointing. Separated from
-        its twin to preserve the TorchScript-ability of the latter.
+        its twin to preserve the flowScript-ability of the latter.
     """
     def __init__(self,
         c_m: int,
@@ -490,18 +491,18 @@ class ExtraMSABlock(nn.Module):
         )
 
     def forward(self,
-        m: Optional[torch.Tensor],
-        z: Optional[torch.Tensor],
-        msa_mask: torch.Tensor,
-        pair_mask: torch.Tensor,
+        m: Optional[flow.Tensor],
+        z: Optional[flow.Tensor],
+        msa_mask: flow.Tensor,
+        pair_mask: flow.Tensor,
         chunk_size: Optional[int] = None,
         use_lma: bool = False,
         inplace_safe: bool = False,
         _mask_trans: bool = True,
         _attn_chunk_size: Optional[int] = None,
         _offload_inference: bool = False,
-        _offloadable_inputs: Optional[Sequence[torch.Tensor]] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:  
+        _offloadable_inputs: Optional[Sequence[flow.Tensor]] = None,
+    ) -> Tuple[flow.Tensor, flow.Tensor]:  
         if(_attn_chunk_size is None):
             _attn_chunk_size = chunk_size
        
@@ -516,14 +517,14 @@ class ExtraMSABlock(nn.Module):
         m = add(m, 
             self.msa_dropout_layer(
                 self.msa_att_row(
-                    m.clone() if torch.is_grad_enabled() else m, 
-                    z=z.clone() if torch.is_grad_enabled() else z, 
+                    m.clone() if flow.is_grad_enabled() else m, 
+                    z=z.clone() if flow.is_grad_enabled() else z, 
                     mask=msa_mask, 
                     chunk_size=_attn_chunk_size,
                     use_lma=use_lma,
                     use_memory_efficient_kernel=not use_lma,
                     _checkpoint_chunks=
-                        self.ckpt if torch.is_grad_enabled() else False,
+                        self.ckpt if flow.is_grad_enabled() else False,
                 )
             ),
             inplace=inplace_safe,
@@ -561,10 +562,10 @@ class ExtraMSABlock(nn.Module):
                 _attn_chunk_size=_attn_chunk_size,
                 _offload_inference=_offload_inference,
             )
-            
+
             return m, z
 
-        if(torch.is_grad_enabled() and self.ckpt):
+        if(flow.is_grad_enabled() and self.ckpt):
             checkpoint_fn = get_checkpoint_fn()
             m, z = checkpoint_fn(fn, input_tensors)
         else:
@@ -672,13 +673,13 @@ class EvoformerStack(nn.Module):
             self.chunk_size_tuner = ChunkSizeTuner()
 
     def _prep_blocks(self, 
-        m: torch.Tensor, 
-        z: torch.Tensor, 
+        m: flow.Tensor, 
+        z: flow.Tensor, 
         chunk_size: int,
         use_lma: bool,
         use_flash: bool,
-        msa_mask: Optional[torch.Tensor],
-        pair_mask: Optional[torch.Tensor],
+        msa_mask: Optional[flow.Tensor],
+        pair_mask: Optional[flow.Tensor],
         inplace_safe: bool,
         _mask_trans: bool,
     ):
@@ -698,7 +699,7 @@ class EvoformerStack(nn.Module):
 
         if(self.clear_cache_between_blocks):
             def block_with_cache_clear(block, *args, **kwargs):
-                torch.cuda.empty_cache()
+                flow.cuda.empty_cache()
                 return block(*args, **kwargs)
 
             blocks = [partial(block_with_cache_clear, b) for b in blocks]
@@ -714,7 +715,7 @@ class EvoformerStack(nn.Module):
             blocks = [
                 partial(b, 
                     chunk_size=tuned_chunk_size,
-                    # A temporary measure to address torch's occasional
+                    # A temporary measure to address flow's occasional
                     # inability to allocate large tensors
                     _attn_chunk_size=max(chunk_size, tuned_chunk_size // 4),
                 ) for b in blocks
@@ -723,15 +724,15 @@ class EvoformerStack(nn.Module):
         return blocks
 
     def _forward_offload(self,
-        input_tensors: Sequence[torch.Tensor],
-        msa_mask: torch.Tensor,
-        pair_mask: torch.Tensor,
+        input_tensors: Sequence[flow.Tensor],
+        msa_mask: flow.Tensor,
+        pair_mask: flow.Tensor,
         chunk_size: int,
         use_lma: bool = False,
         use_flash: bool = False,
         _mask_trans: bool = True,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        assert(not (self.training or torch.is_grad_enabled()))
+    ) -> Tuple[flow.Tensor, flow.Tensor, flow.Tensor]:
+        assert(not (self.training or flow.is_grad_enabled()))
         blocks = self._prep_blocks(
             # We are very careful not to create references to these tensors in
             # this function
@@ -764,16 +765,16 @@ class EvoformerStack(nn.Module):
         return m, z, s
 
     def forward(self,
-        m: torch.Tensor,
-        z: torch.Tensor,
-        msa_mask: torch.Tensor,
-        pair_mask: torch.Tensor,
+        m: flow.Tensor,
+        z: flow.Tensor,
+        msa_mask: flow.Tensor,
+        pair_mask: flow.Tensor,
         chunk_size: int,
         use_lma: bool = False,
         use_flash: bool = False,
         inplace_safe: bool = False,
         _mask_trans: bool = True,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> Tuple[flow.Tensor, flow.Tensor, flow.Tensor]:
         """
         Args:
             m:
@@ -812,7 +813,7 @@ class EvoformerStack(nn.Module):
         )
 
         blocks_per_ckpt = self.blocks_per_ckpt
-        if(not torch.is_grad_enabled()):
+        if(not flow.is_grad_enabled()):
             blocks_per_ckpt = None
         
         m, z = checkpoint_blocks(
@@ -880,12 +881,12 @@ class ExtraMSAStack(nn.Module):
             self.chunk_size_tuner = ChunkSizeTuner()
 
     def _prep_blocks(self, 
-        m: torch.Tensor, 
-        z: torch.Tensor, 
+        m: flow.Tensor, 
+        z: flow.Tensor, 
         chunk_size: int,
         use_lma: bool,
-        msa_mask: Optional[torch.Tensor],
-        pair_mask: Optional[torch.Tensor],
+        msa_mask: Optional[flow.Tensor],
+        pair_mask: Optional[flow.Tensor],
         inplace_safe: bool,
         _mask_trans: bool,
     ):
@@ -902,7 +903,7 @@ class ExtraMSAStack(nn.Module):
         ]
 
         def clear_cache(b, *args, **kwargs):
-            torch.cuda.empty_cache()
+            flow.cuda.empty_cache()
             return b(*args, **kwargs)
 
         if(self.clear_cache_between_blocks):
@@ -920,7 +921,7 @@ class ExtraMSAStack(nn.Module):
             blocks = [
                 partial(b, 
                     chunk_size=tuned_chunk_size,
-                    # A temporary measure to address torch's occasional
+                    # A temporary measure to address flow's occasional
                     # inability to allocate large tensors
                     _attn_chunk_size=max(chunk_size, tuned_chunk_size // 4),
                 ) for b in blocks
@@ -929,14 +930,14 @@ class ExtraMSAStack(nn.Module):
         return blocks
 
     def _forward_offload(self,
-        input_tensors: Sequence[torch.Tensor],
+        input_tensors: Sequence[flow.Tensor],
         chunk_size: int,
         use_lma: bool = False,
-        msa_mask: Optional[torch.Tensor] = None,
-        pair_mask: Optional[torch.Tensor] = None,
+        msa_mask: Optional[flow.Tensor] = None,
+        pair_mask: Optional[flow.Tensor] = None,
         _mask_trans: bool = True,
-    ) -> torch.Tensor:
-        assert(not (self.training or torch.is_grad_enabled()))
+    ) -> flow.Tensor:
+        assert(not (self.training or flow.is_grad_enabled()))
         blocks = self._prep_blocks(
             # We are very careful not to create references to these tensors in
             # this function
@@ -964,15 +965,15 @@ class ExtraMSAStack(nn.Module):
         return input_tensors[1]
 
     def forward(self,
-        m: torch.Tensor,
-        z: torch.Tensor,
-        msa_mask: Optional[torch.Tensor],
-        pair_mask: Optional[torch.Tensor],
+        m: flow.Tensor,
+        z: flow.Tensor,
+        msa_mask: Optional[flow.Tensor],
+        pair_mask: Optional[flow.Tensor],
         chunk_size: int,
         use_lma: bool = False,
         inplace_safe: bool = False,
         _mask_trans: bool = True,
-    ) -> torch.Tensor:
+    ) -> flow.Tensor:
         """
         Args:
             m:
@@ -1001,7 +1002,7 @@ class ExtraMSAStack(nn.Module):
         )
 
         for b in blocks:
-            if(self.ckpt and torch.is_grad_enabled()):
+            if(self.ckpt and flow.is_grad_enabled()):
                 m, z = checkpoint_fn(b, m, z)
             else:
                 m, z = b(m, z)

@@ -18,8 +18,8 @@ deepspeed_is_installed = importlib.util.find_spec("deepspeed") is not None
 if(deepspeed_is_installed):
     import deepspeed
 
-import torch
-import torch.utils.checkpoint
+import oneflow as flow
+import oneflow.utils.checkpoint
 
 
 BLOCK_ARG = Any
@@ -34,12 +34,12 @@ def get_checkpoint_fn():
     if(deepspeed_is_configured):
         checkpoint = deepspeed.checkpointing.checkpoint
     else:
-        checkpoint = torch.utils.checkpoint.checkpoint
+        checkpoint = flow.utils.checkpoint.checkpoint
 
     return checkpoint
 
 
-@torch.jit.ignore
+# @flow.jit.ignore
 def checkpoint_blocks(
     blocks: List[Callable],
     args: BLOCK_ARGS,
@@ -80,8 +80,7 @@ def checkpoint_blocks(
 
     # Avoids mishaps when the blocks take just one argument
     args = wrap(args)
-
-    if blocks_per_ckpt is None or not torch.is_grad_enabled():
+    if blocks_per_ckpt is None or not flow.is_grad_enabled():
         return exec(blocks, args)
     elif blocks_per_ckpt < 1 or blocks_per_ckpt > len(blocks):
         raise ValueError("blocks_per_ckpt must be between 1 and len(blocks)")

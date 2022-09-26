@@ -2,42 +2,44 @@ import argparse
 import ctypes
 from datetime import date
 import sys
+import shutil
 
 
 def add_data_args(parser: argparse.ArgumentParser):
     parser.add_argument(
-        '--uniref90_database_path', type=str, default=None,
+        '--uniref90_database_path', type=str, default="/data/dataset/openfold/uniref90/uniref90.fasta",
     )
     parser.add_argument(
-        '--mgnify_database_path', type=str, default=None,
+        '--mgnify_database_path', type=str, default="/data/dataset/openfold/mgnify/mgy_clusters_2018_12.fa",
     )
     parser.add_argument(
-        '--pdb70_database_path', type=str, default=None,
+        '--pdb70_database_path', type=str, default="/home/huangwei/data/pdb70/pdb70", #最后面pdb70为pdb70_xxx的前缀，下同
     )
     parser.add_argument(
-        '--uniclust30_database_path', type=str, default=None,
+        '--uniclust30_database_path', type=str, default="/data/dataset/openfold/uniclust30/uniclust30_2018_08/uniclust30_2018_08",
     )
     parser.add_argument(
-        '--bfd_database_path', type=str, default=None,
+        '--bfd_database_path', type=str, default="/data/dataset/openfold/bfd/bfd_metaclust_clu_complete_id30_c90_final_seq.sorted_opt",
     )
     parser.add_argument(
-        '--jackhmmer_binary_path', type=str, default='/usr/bin/jackhmmer'
+        '--jackhmmer_binary_path', type=str, default=shutil.which('jackhmmer'),
+        help="蛋白质序列迭代搜索蛋白质序列库"
     )
     parser.add_argument(
-        '--hhblits_binary_path', type=str, default='/usr/bin/hhblits'
+        '--hhblits_binary_path', type=str, default=shutil.which('hhblits'),
     )
     parser.add_argument(
-        '--hhsearch_binary_path', type=str, default='/usr/bin/hhsearch'
+        '--hhsearch_binary_path', type=str, default=shutil.which('hhsearch'),
     )
     parser.add_argument(
-        '--kalign_binary_path', type=str, default='/usr/bin/kalign'
+        '--kalign_binary_path', type=str, default=shutil.which("kalign"),
     )
     parser.add_argument(
-        '--max_template_date', type=str,
+        '--max_template_date', type=str, 
         default=date.today().strftime("%Y-%m-%d"),
     )
     parser.add_argument(
-        '--obsolete_pdbs_path', type=str, default=None
+        '--obsolete_pdbs_path', type=str, default="/data/dataset/openfold/pdb_mmcif/obsolete.dat"
     )
     parser.add_argument(
         '--release_dates_path', type=str, default=None

@@ -16,8 +16,8 @@
 import math
 
 import numpy as np
-import torch
-import torch.nn as nn
+import oneflow as flow
+import oneflow.nn as nn
 from typing import Dict
 
 from openfold.np import protein
@@ -35,14 +35,14 @@ def pseudo_beta_fn(aatype, all_atom_positions, all_atom_masks):
     is_gly = aatype == rc.restype_order["G"]
     ca_idx = rc.atom_order["CA"]
     cb_idx = rc.atom_order["CB"]
-    pseudo_beta = torch.where(
+    pseudo_beta = flow.where(
         is_gly[..., None].expand(*((-1,) * len(is_gly.shape)), 3),
         all_atom_positions[..., ca_idx, :],
         all_atom_positions[..., cb_idx, :],
     )
 
     if all_atom_masks is not None:
-        pseudo_beta_mask = torch.where(
+        pseudo_beta_mask = flow.where(
             is_gly,
             all_atom_masks[..., ca_idx],
             all_atom_masks[..., cb_idx],
@@ -72,7 +72,7 @@ def build_template_angle_feat(template_feats):
         "template_alt_torsion_angles_sin_cos"
     ]
     torsion_angles_mask = template_feats["template_torsion_angles_mask"]
-    template_angle_feat = torch.cat(
+    template_angle_feat = flow.cat(
         [
             nn.functional.one_hot(template_aatype, 22),
             torsion_angles_sin_cos.reshape(
@@ -100,11 +100,11 @@ def build_template_pair_feat(
 
     # Compute distogram (this seems to differ slightly from Alg. 5)
     tpb = batch["template_pseudo_beta"]
-    dgram = torch.sum(
+    dgram = flow.sum(
         (tpb[..., None, :] - tpb[..., None, :, :]) ** 2, dim=-1, keepdim=True
     )
-    lower = torch.linspace(min_bin, max_bin, no_bins, device=tpb.device) ** 2
-    upper = torch.cat([lower[1:], lower.new_tensor([inf])], dim=-1)
+    lower = flow.linspace(min_bin, max_bin, no_bins, device=tpb.device) ** 2
+    upper = flow.cat([lower[1:], lower.new_tensor([inf])], dim=-1)
     dgram = ((dgram > lower) * (dgram < upper)).type(dgram.dtype)
 
     to_concat = [dgram, template_mask_2d[..., None]]
@@ -136,7 +136,7 @@ def build_template_pair_feat(
     points = rigids.get_trans()[..., None, :, :]
     rigid_vec = rigids[..., None].invert_apply(points)
 
-    inv_distance_scalar = torch.rsqrt(eps + torch.sum(rigid_vec ** 2, dim=-1))
+    inv_distance_scalar = flow.rsqrt(eps + flow.sum(rigid_vec ** 2, dim=-1))
 
     t_aa_masks = batch["template_all_atom_mask"]
     template_mask = (
@@ -150,10 +150,10 @@ def build_template_pair_feat(
     if(not use_unit_vector):
         unit_vector = unit_vector * 0.
     
-    to_concat.extend(torch.unbind(unit_vector[..., None, :], dim=-1))
+    to_concat.extend(flow.unbind(unit_vector[..., None, :], dim=-1))
     to_concat.append(template_mask_2d[..., None])
 
-    act = torch.cat(to_concat, dim=-1)
+    act = flow.cat(to_concat, dim=-1)
     act = act * template_mask_2d[..., None]
 
     return act
@@ -166,14 +166,14 @@ def build_extra_msa_feat(batch):
         batch["extra_has_deletion"].unsqueeze(-1),
         batch["extra_deletion_value"].unsqueeze(-1),
     ]
-    return torch.cat(msa_feat, dim=-1)
+    return flow.cat(msa_feat, dim=-1)
 
 
 def torsion_angles_to_frames(
     r: Rigid,
-    alpha: torch.Tensor,
-    aatype: torch.Tensor,
-    rrgdf: torch.Tensor,
+    alpha: flow.Tensor,
+    aatype: flow.Tensor,
+    rrgdf: flow.Tensor,
 ):
     # [*, N, 8, 4, 4]
     default_4x4 = rrgdf[aatype, ...]
@@ -187,7 +187,7 @@ def torsion_angles_to_frames(
     bb_rot[..., 1] = 1
 
     # [*, N, 8, 2]
-    alpha = torch.cat(
+    alpha = flow.cat(
         [bb_rot.expand(*alpha.shape[:-2], -1, -1), alpha], dim=-2
     )
 
@@ -237,7 +237,7 @@ def torsion_angles_to_frames(
 
 def frames_and_literature_positions_to_atom14_pos(
     r: Rigid,
-    aatype: torch.Tensor,
+    aatype: flow.Tensor,
     default_frames,
     group_idx,
     atom_mask,
@@ -260,7 +260,7 @@ def frames_and_literature_positions_to_atom14_pos(
 
     # [*, N, 14]
     t_atoms_to_global = t_atoms_to_global.map_tensor_fn(
-        lambda x: torch.sum(x, dim=-1)
+        lambda x: flow.sum(x, dim=-1)
     )
 
     # [*, N, 14, 1]

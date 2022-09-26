@@ -15,8 +15,8 @@
 from functools import partial
 import weakref
 
-import torch
-import torch.nn as nn
+import oneflow as flow
+import oneflow.nn as nn
 
 from openfold.model.embedders import (
     InputEmbedder,
@@ -138,7 +138,7 @@ class AlphaFold(nn.Module):
         for i in range(n_templ):
             idx = batch["template_aatype"].new_tensor(i)
             single_template_feats = tensor_tree_map(
-                lambda t: torch.index_select(t, templ_dim, idx).squeeze(templ_dim),
+                lambda t: flow.index_select(t, templ_dim, idx),   #.squeeze(templ_dim),
                 batch,
             )
 
@@ -160,8 +160,8 @@ class AlphaFold(nn.Module):
             del t
 
         if(not inplace_safe):
-            t_pair = torch.stack(pair_embeds, dim=templ_dim)
-       
+            t_pair = flow.stack(pair_embeds, dim=templ_dim)
+        
         del pair_embeds
 
         # [*, S_t, N, N, C_z]
@@ -183,7 +183,7 @@ class AlphaFold(nn.Module):
             use_lma=self.globals.use_lma,
         )
 
-        t_mask = torch.sum(batch["template_mask"], dim=-1) > 0
+        t_mask = flow.sum(batch["template_mask"], dim=-1) > 0
         # Append singletons
         t_mask = t_mask.reshape(
             *t_mask.shape, *([1] * (len(t.shape) - len(t_mask.shape)))
@@ -219,7 +219,7 @@ class AlphaFold(nn.Module):
         # This needs to be done manually for DeepSpeed's sake
         dtype = next(self.parameters()).dtype
         for k in feats:
-            if(feats[k].dtype == torch.float32):
+            if(feats[k].dtype == flow.float32):
                 feats[k] = feats[k].to(dtype=dtype)
 
         # Grab some data about the input
@@ -231,7 +231,7 @@ class AlphaFold(nn.Module):
         
         # Controls whether the model uses in-place operations throughout
         # The dual condition accounts for activation checkpoints
-        inplace_safe = not (self.training or torch.is_grad_enabled())
+        inplace_safe = not (self.training or flow.is_grad_enabled())
 
         # Prep some features
         seq_mask = feats["seq_mask"]
@@ -327,14 +327,14 @@ class AlphaFold(nn.Module):
 
             if "template_angle_embedding" in template_embeds:
                 # [*, S = S_c + S_t, N, C_m]
-                m = torch.cat(
+                m = flow.cat(
                     [m, template_embeds["template_angle_embedding"]], 
                     dim=-3
                 )
 
                 # [*, S, N]
                 torsion_angles_mask = feats["template_torsion_angles_mask"]
-                msa_mask = torch.cat(
+                msa_mask = flow.cat(
                     [feats["msa_mask"], torsion_angles_mask[..., 2]], 
                     dim=-2
                 )
@@ -363,6 +363,7 @@ class AlphaFold(nn.Module):
                 del input_tensors
             else:
                 # [*, N, N, C_z]
+                # z = flow.tensor(np.load("../openfold_torch/z.npy")).to(z.device)
                 z = self.extra_msa_stack(
                     a, z,
                     msa_mask=feats["extra_msa_mask"].to(dtype=m.dtype),
@@ -491,7 +492,7 @@ class AlphaFold(nn.Module):
         m_1_prev, z_prev, x_prev = None, None, None
         prevs = [m_1_prev, z_prev, x_prev]
 
-        is_grad_enabled = torch.is_grad_enabled()
+        is_grad_enabled = flow.is_grad_enabled()
 
         # Main recycling loop
         num_iters = batch["aatype"].shape[-1]
@@ -502,11 +503,11 @@ class AlphaFold(nn.Module):
 
             # Enable grad iff we're training and it's the final recycling layer
             is_final_iter = cycle_no == (num_iters - 1)
-            with torch.set_grad_enabled(is_grad_enabled and is_final_iter):
+            with flow.set_grad_enabled(is_grad_enabled and is_final_iter):
                 if is_final_iter:
-                    # Sidestep AMP bug (PyTorch issue #65766)
-                    if torch.is_autocast_enabled():
-                        torch.clear_autocast_cache()
+                    # Sidestep AMP bug (Pyflow issue #65766)
+                    if flow.is_autocast_enabled():
+                        flow.clear_autocast_cache()
 
                 # Run the next iteration of the model
                 outputs, m_1_prev, z_prev, x_prev = self.iteration(
