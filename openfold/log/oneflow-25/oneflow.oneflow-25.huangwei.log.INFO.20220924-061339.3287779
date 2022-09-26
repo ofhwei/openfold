@@ -1,0 +1,24 @@
+Log file created at: 2022/09/24 06:13:39
+Running on machine: oneflow-25
+Running duration (h:mm:ss): 0:00:00
+Log line format: [IWEF]yyyymmdd hh:mm:ss.uuuuuu threadid file:line] msg
+I20220924 06:13:39.719883 3287779 env_global_objects_scope.cpp:147] Using rpc backend: local
+I20220924 06:13:39.911991 3287779 epoll_comm_network.cpp:63] CommNet:Epoll listening on 0.0.0.0:45619
+W20220924 06:14:00.671468 3287928 ep_backend_allocator.cpp:37] OOM error is detected, process will exit. And it will start to reset CUDA device for releasing device memory.
+F20220924 06:14:00.671434 3287928 virtual_machine_engine.cpp:390] out of memory
+Error message from /home/huangwei/workspace/repos/oneflow/oneflow/core/vm/virtual_machine_engine.cpp:390
+	instruction->Prepare(): reset device
+
+  File "/home/huangwei/workspace/repos/oneflow/oneflow/core/vm/virtual_machine_engine.cpp", line 390, in DispatchInstruction
+    instruction->Prepare()
+  File "/home/huangwei/workspace/repos/oneflow/oneflow/core/vm/op_call_instruction_policy.cpp", line 31, in Prepare
+    AllocateOutputBlobsMemory(op_call_instruction_policy, allocator)
+  File "/home/huangwei/workspace/repos/oneflow/oneflow/core/vm/op_call_instruction_policy.cpp", line 82, in AllocateOutputBlobsMemory
+    blob_object->TryAllocateBlobBodyMemory(allocator)
+  File "/home/huangwei/workspace/repos/oneflow/oneflow/core/eager/eager_blob_object.cpp", line 113, in TryAllocateBlobBodyMemory
+    allocator->Allocate(&dptr, required_body_bytes)
+  File "/home/huangwei/workspace/repos/oneflow/oneflow/core/vm/bin_allocator.h", line 392, in Allocate
+    AllocateBlockToExtendTotalMem(aligned_size)
+  File "/home/huangwei/workspace/repos/oneflow/oneflow/core/vm/bin_allocator.h", line 305, in AllocateBlockToExtendTotalMem
+    backend_->Allocate(&mem_ptr, final_allocate_bytes)
+Error Type: oneflow.ErrorProto.out_of_memory_error

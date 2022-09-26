@@ -1,0 +1,5 @@
+Log file created at: 2022/09/24 06:04:51
+Running on machine: oneflow-25
+Running duration (h:mm:ss): 0:00:00
+Log line format: [IWEF]yyyymmdd hh:mm:ss.uuuuuu threadid file:line] msg
+F20220924 06:04:51.305716 3247272 shape.cpp:30] Check failed: index < tp()->NumAxes() (0 vs. 0)  Shape: () visit index: 0 > num_axes: 0

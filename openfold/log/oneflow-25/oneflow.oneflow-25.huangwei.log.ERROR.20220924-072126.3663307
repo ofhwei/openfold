@@ -1,0 +1,5 @@
+Log file created at: 2022/09/24 07:21:26
+Running on machine: oneflow-25
+Running duration (h:mm:ss): 0:00:00
+Log line format: [IWEF]yyyymmdd hh:mm:ss.uuuuuu threadid file:line] msg
+F20220924 07:21:26.610476 3663579 cuda_stream.cpp:114] Check failed: cudnnCreate(&cudnn_handle_) : CUDNN_STATUS_NOT_INITIALIZED (1) 
